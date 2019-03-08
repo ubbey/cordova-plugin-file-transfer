@@ -53,6 +53,7 @@ import org.json.JSONObject;
 
 import android.net.Uri;
 import android.os.Build;
+import android.util.Log;
 import android.webkit.CookieManager;
 
 public class FileTransfer extends CordovaPlugin {
@@ -69,15 +70,18 @@ public class FileTransfer extends CordovaPlugin {
     public static int NOT_MODIFIED_ERR = 5;
 
     private static HashMap<String, RequestContext> activeRequests = new HashMap<String, RequestContext>();
-    private static final int MAX_BUFFER_SIZE = 16 * 1024;
+	private static final int MAX_BUFFER_SIZE = 16 * 1024;
 
     private static final class RequestContext {
         String source;
         String target;
         File targetFile;
         CallbackContext callbackContext;
-        HttpURLConnection connection;
-        boolean aborted;
+		HttpURLConnection connection;
+		boolean aborted;
+		boolean paused;
+		String business;
+
         RequestContext(String source, String target, CallbackContext callbackContext) {
             this.source = source;
             this.target = target;
@@ -166,13 +170,19 @@ public class FileTransfer extends CordovaPlugin {
     public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
         if (action.equals("upload") || action.equals("download")) {
             String source = args.getString(0);
-            String target = args.getString(1);
+			String target = args.getString(1);
 
             if (action.equals("upload")) {
                 upload(source, target, args, callbackContext);
-            } else {
+            } else if(action.equals("download")){
                 download(source, target, args, callbackContext);
             }
+
+            return true;
+        } else if (action.equals("pause")) {
+            String objectId = args.getString(0);
+            pause(objectId);
+            callbackContext.success();
             return true;
         } else if (action.equals("abort")) {
             String objectId = args.getString(0);
@@ -279,9 +289,9 @@ public class FileTransfer extends CordovaPlugin {
         final JSONObject headers = args.optJSONObject(8) == null ? params.optJSONObject("headers") : args.optJSONObject(8);
         final String objectId = args.getString(9);
         final String httpMethod = getArgument(args, 10, "POST");
-
+		final int offset = params.optInt("offset", 0);
         final CordovaResourceApi resourceApi = webView.getResourceApi();
-
+        Log.d(LOG_TAG, "上传偏移量: " + offset);
         LOG.d(LOG_TAG, "fileKey: " + fileKey);
         LOG.d(LOG_TAG, "fileName: " + fileName);
         LOG.d(LOG_TAG, "mimeType: " + mimeType);
@@ -306,12 +316,14 @@ public class FileTransfer extends CordovaPlugin {
         synchronized (activeRequests) {
             activeRequests.put(objectId, context);
         }
+        context.business = "upload";
 
         cordova.getThreadPool().execute(new Runnable() {
             public void run() {
-                if (context.aborted) {
-                    return;
-                }
+                //删除时先不终止进程
+                 if (context.aborted) {
+                     return;
+                 }
 
                 // We should call remapUri on background thread otherwise it throws
                 // IllegalStateException when trying to remap 'cdvfile://localhost/content/...' URIs
@@ -322,7 +334,8 @@ public class FileTransfer extends CordovaPlugin {
 
                 HttpURLConnection conn = null;
                 int totalBytes = 0;
-                int fixedLength = -1;
+				int fixedLength = -1;
+				int contentLength = -1;
                 try {
                     // Create return object
                     FileUploadResult result = new FileUploadResult();
@@ -370,7 +383,7 @@ public class FileTransfer extends CordovaPlugin {
                     try {
                         for (Iterator<?> iter = params.keys(); iter.hasNext();) {
                             Object key = iter.next();
-                            if(!String.valueOf(key).equals("headers"))
+                            if(!String.valueOf(key).equals("headers") && !String.valueOf(key).equals("offset"))
                             {
                               beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
                               beforeData.append("Content-Disposition: form-data; name=\"").append(key.toString()).append('"');
@@ -383,36 +396,59 @@ public class FileTransfer extends CordovaPlugin {
                         LOG.e(LOG_TAG, e.getMessage(), e);
                     }
 
-                    beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
-                    beforeData.append("Content-Disposition: form-data; name=\"").append(fileKey).append("\";");
-                    beforeData.append(" filename=\"").append(fileName).append('"').append(LINE_END);
-                    beforeData.append("Content-Type: ").append(mimeType).append(LINE_END).append(LINE_END);
-                    byte[] beforeDataBytes = beforeData.toString().getBytes("UTF-8");
-                    byte[] tailParamsBytes = (LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8");
-
-
-                    // Get a input stream of the file on the phone
-                    OpenForReadResult readResult = resourceApi.openForRead(sourceUri);
-
-                    int stringLength = beforeDataBytes.length + tailParamsBytes.length;
-                    if (readResult.length >= 0) {
-                        fixedLength = (int)readResult.length;
-                        if (multipartFormUpload)
-                            fixedLength += stringLength;
-                        progress.setLengthComputable(true);
-                        progress.setTotal(fixedLength);
-                    }
-                    LOG.d(LOG_TAG, "Content Length: " + fixedLength);
                     // setFixedLengthStreamingMode causes and OutOfMemoryException on pre-Froyo devices.
                     // http://code.google.com/p/android/issues/detail?id=3164
                     // It also causes OOM if HTTPS is used, even on newer devices.
                     boolean useChunkedMode = chunkedMode || (Build.VERSION.SDK_INT < Build.VERSION_CODES.FROYO);
                     useChunkedMode = useChunkedMode || (fixedLength == -1);
 
+                    // Get a input stream of the file on the phone
+                    OpenForReadResult readResult = resourceApi.openForRead(sourceUri);
+                    if (readResult.length >= 0) {
+                        fixedLength = (int)readResult.length;
+                        contentLength = fixedLength;
+                        Log.d(LOG_TAG, "读到文件长度：" + contentLength);
+//                        if (multipartFormUpload)
+//                            fixedLength += stringLength;
+                        progress.setLengthComputable(true);
+                        progress.setTotal(contentLength);
+                    }
+                    //数据读取完毕,写入长度数据
+                    if (useChunkedMode) {
+                        beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
+                        beforeData.append("Content-Disposition: form-data; name=\"").append("range").append('"');
+                        beforeData.append(LINE_END).append(LINE_END);
+                        beforeData.append(offset + "-" + (contentLength - 1) + "-" +  contentLength);
+                        beforeData.append(LINE_END);
+                    }
+
+                    beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
+                    beforeData.append("Content-Disposition: form-data; name=\"").append(fileKey).append("\";");
+                    beforeData.append(" filename=\"").append(fileName).append('"').append(LINE_END);
+                    beforeData.append("Content-Type: ").append(mimeType).append(LINE_END).append(LINE_END);
+
+                    byte[] beforeDataBytes = beforeData.toString().getBytes("UTF-8");
+                    byte[] tailParamsBytes = (LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8");
+
+
+
+                    int stringLength = beforeDataBytes.length + tailParamsBytes.length;
+                    if (readResult.length >= 0) {
+//						fixedLength = (int)readResult.length;
+//						contentLength = fixedLength;
+                        if (multipartFormUpload)
+                            fixedLength += stringLength;
+//                        progress.setLengthComputable(true);
+//                        progress.setTotal(contentLength);
+                    }
+                    LOG.d(LOG_TAG, "Content Length: " + fixedLength);
+
+
                     if (useChunkedMode) {
                         conn.setChunkedStreamingMode(MAX_BUFFER_SIZE);
                         // Although setChunkedStreamingMode sets this header, setting it explicitly here works
                         // around an OutOfMemoryException when using https.
+                        //只是借用chunk传输模式，自定义后端接收数据
                         conn.setRequestProperty("Transfer-Encoding", "chunked");
                     } else {
                         conn.setFixedLengthStreamingMode(fixedLength);
@@ -424,7 +460,8 @@ public class FileTransfer extends CordovaPlugin {
 
                     conn.connect();
 
-                    OutputStream sendStream = null;
+					OutputStream sendStream = null;
+					int accumulateOffset = offset;
                     try {
                         sendStream = conn.getOutputStream();
                         synchronized (context) {
@@ -440,6 +477,8 @@ public class FileTransfer extends CordovaPlugin {
                             totalBytes += beforeDataBytes.length;
                         }
 
+                        //由于offset，需要跳过前面的字段
+                        readResult.inputStream.skip(offset);
                         // create a buffer of maximum size
                         int bytesAvailable = readResult.inputStream.available();
                         int bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
@@ -448,31 +487,40 @@ public class FileTransfer extends CordovaPlugin {
                         // read file and write it into form...
                         int bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
 
-                        long prevBytesRead = 0;
+						long prevBytesRead = 0;
                         while (bytesRead > 0) {
+                            //暂停，停止读数据...
+                            if (context.paused) {
+                                break;
+                            }
                             totalBytes += bytesRead;
+                            //累计发送长度
+                            accumulateOffset += bytesRead;
                             result.setBytesSent(totalBytes);
                             sendStream.write(buffer, 0, bytesRead);
                             if (totalBytes > prevBytesRead + 102400) {
                                 prevBytesRead = totalBytes;
-                                LOG.d(LOG_TAG, "Uploaded " + totalBytes + " of " + fixedLength + " bytes");
                             }
                             bytesAvailable = readResult.inputStream.available();
                             bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
                             bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
-
+                            LOG.d(LOG_TAG, "Uploaded " + accumulateOffset + " of " + contentLength + " bytes");
                             // Send a progress event.
-                            progress.setLoaded(totalBytes);
+                            //此处进度只计算纯数据进度
+                            progress.setLoaded(accumulateOffset);
                             PluginResult progressResult = new PluginResult(PluginResult.Status.OK, progress.toJSONObject());
                             progressResult.setKeepCallback(true);
                             context.sendPluginResult(progressResult);
                         }
-
-                        if (multipartFormUpload) {
+						
+						if (multipartFormUpload) {
+                            Log.d(LOG_TAG, "Multipart form upload......");
                             // send multipart form data necessary after file data...
                             sendStream.write(tailParamsBytes);
-                            totalBytes += tailParamsBytes.length;
+                            //前面已经加过了
+//                            totalBytes += tailParamsBytes.length;
                         }
+
                         sendStream.flush();
                     } finally {
                         safeClose(readResult.inputStream);
@@ -482,6 +530,7 @@ public class FileTransfer extends CordovaPlugin {
                         context.connection = null;
                     }
                     LOG.d(LOG_TAG, "Sent " + totalBytes + " of " + fixedLength);
+                    LOG.d(LOG_TAG, "Sent raw bytes " + accumulateOffset + " of " + contentLength + "from offset " + offset);
 
                     //------------------ read the SERVER RESPONSE
                     String responseString;
@@ -491,12 +540,12 @@ public class FileTransfer extends CordovaPlugin {
                     TrackingInputStream inStream = null;
                     try {
                         inStream = getInputStream(conn);
-                        synchronized (context) {
-                            if (context.aborted) {
-                                return;
-                            }
-                            context.connection = conn;
-                        }
+                         synchronized (context) {
+                             if (context.aborted) {
+                                 return;
+                             }
+                             context.connection = conn;
+                         }
 
                         ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, conn.getContentLength()));
                         byte[] buffer = new byte[1024];
@@ -519,7 +568,7 @@ public class FileTransfer extends CordovaPlugin {
                     // send request and retrieve response
                     result.setResponseCode(responseCode);
                     result.setResponse(responseString);
-
+                    Log.d(LOG_TAG, "runrunrun: " + responseCode);
                     context.sendPluginResult(new PluginResult(PluginResult.Status.OK, result.toJSONObject()));
                 } catch (FileNotFoundException e) {
                     JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, conn, e);
@@ -655,11 +704,11 @@ public class FileTransfer extends CordovaPlugin {
      * Downloads a file form a given URL and saves it to the specified directory.
      *
      * @param source        URL of the server to receive the file
-     * @param target            Full path of the file on the file system
+     * @param targetOrigin            Full path of the file on the file system
      */
-    private void download(final String source, final String target, JSONArray args, CallbackContext callbackContext) throws JSONException {
-        LOG.d(LOG_TAG, "download " + source + " to " +  target);
-
+    private void download(final String source, final String targetOrigin, JSONArray args, CallbackContext callbackContext) throws JSONException {
+        LOG.d(LOG_TAG, "download " + source + " to " +  targetOrigin);
+        final String target = targetOrigin + ".downloading";
         final CordovaResourceApi resourceApi = webView.getResourceApi();
 
         final String objectId = args.getString(3);
@@ -719,13 +768,13 @@ public class FileTransfer extends CordovaPlugin {
         synchronized (activeRequests) {
             activeRequests.put(objectId, context);
         }
+        context.business = "download";
 
         cordova.getThreadPool().execute(new Runnable() {
             public void run() {
                 if (context.aborted) {
                     return;
                 }
-
                 // Accept a path or a URI for the source.
                 Uri tmpTarget = Uri.parse(target);
                 Uri targetUri = resourceApi.remapUri(
@@ -743,14 +792,26 @@ public class FileTransfer extends CordovaPlugin {
                     file = resourceApi.mapUriToFile(targetUri);
                     context.targetFile = file;
 
+                    //查询文件是否存在
+                    long start = 0;
+                    if(file.isFile()) {
+                        Log.d(LOG_TAG, "文件已存在");
+                        start = file.length();
+                    } else {
+                        Log.d(LOG_TAG, "文件不存在");
+                    }
+                    headers.put("Range", "bytes=" + start + "-");
+                    Log.d(LOG_TAG, "downloaded: " + start);
+
                     LOG.d(LOG_TAG, "Download file:" + sourceUri);
 
                     FileProgressResult progress = new FileProgressResult();
-
+                    long contentLength = 0;
                     if (isLocalTransfer) {
                         readResult = resourceApi.openForRead(sourceUri);
                         if (readResult.length != -1) {
                             progress.setLengthComputable(true);
+                            contentLength = readResult.length;
                             progress.setTotal(readResult.length);
                         }
                         inputStream = new SimpleTrackingInputStream(readResult.inputStream);
@@ -770,7 +831,7 @@ public class FileTransfer extends CordovaPlugin {
 
                         // This must be explicitly set for gzip progress tracking to work.
                         connection.setRequestProperty("Accept-Encoding", "gzip");
-
+                        Log.d(LOG_TAG, "headers: " + headers);
                         // Handle the other headers
                         if (headers != null) {
                             addHeadersToRequest(connection, headers);
@@ -787,12 +848,19 @@ public class FileTransfer extends CordovaPlugin {
                             if (connection.getContentEncoding() == null || connection.getContentEncoding().equalsIgnoreCase("gzip")) {
                                 // Only trust content-length header if we understand
                                 // the encoding -- identity or gzip
+                                contentLength = connection.getContentLength() + start;
+                                Log.d(LOG_TAG, "文件总长度: " + contentLength);
+
                                 if (connection.getContentLength() != -1) {
                                     progress.setLengthComputable(true);
-                                    progress.setTotal(connection.getContentLength());
+                                    progress.setTotal(contentLength);
                                 }
                             }
-                            inputStream = getInputStream(connection);
+                            if(connection.getContentLength() == 0) {
+
+                            } else {
+                                inputStream = getInputStream(connection);
+                            }
                         }
                     }
 
@@ -808,14 +876,34 @@ public class FileTransfer extends CordovaPlugin {
                             // write bytes to file
                             byte[] buffer = new byte[MAX_BUFFER_SIZE];
                             int bytesRead = 0;
-                            outputStream = resourceApi.openOutputStream(targetUri);
+                            outputStream = resourceApi.openOutputStream(targetUri, true);
+                            Log.d(LOG_TAG, "aaaaaaaaaa");
+                            long loaded = start;
                             while ((bytesRead = inputStream.read(buffer)) > 0) {
+                                if(context.paused) {
+                                    break;
+                                }
                                 outputStream.write(buffer, 0, bytesRead);
+                                loaded = start + inputStream.getTotalRawBytesRead();
                                 // Send a progress event.
-                                progress.setLoaded(inputStream.getTotalRawBytesRead());
+                                progress.setLoaded(loaded);
                                 PluginResult progressResult = new PluginResult(PluginResult.Status.OK, progress.toJSONObject());
                                 progressResult.setKeepCallback(true);
                                 context.sendPluginResult(progressResult);
+                            }
+                            Log.d(LOG_TAG, "lalala:" + loaded + "," + contentLength);
+                            if(loaded == contentLength) {
+                                Log.d(LOG_TAG, "文件下载完成: loaded");
+                                File f = resourceApi.mapUriToFile(Uri.parse(targetOrigin));
+                                boolean res = file.renameTo(f);
+                                if(!res) {
+                                    Log.d(LOG_TAG, "文件已存在，需先删除");
+                                    //先删除后重命名
+                                    f.delete();
+                                    file.renameTo(f);
+                                } else {
+                                    Log.d(LOG_TAG, "文件重命名成功");
+                                }
                             }
                         } finally {
                             synchronized (context) {
@@ -824,9 +912,6 @@ public class FileTransfer extends CordovaPlugin {
                             safeClose(inputStream);
                             safeClose(outputStream);
                         }
-
-                        LOG.d(LOG_TAG, "Saved file: " + target);
-
 
                         // create FileEntry object
                         Class webViewClass = webView.getClass();
@@ -887,14 +972,27 @@ public class FileTransfer extends CordovaPlugin {
                         result = new PluginResult(PluginResult.Status.ERROR, createFileTransferError(CONNECTION_ERR, source, target, connection, null));
                     }
                     // Remove incomplete download.
-                    if (!cached && result.getStatus() != PluginResult.Status.OK.ordinal() && file != null) {
-                        file.delete();
-                    }
+//                    if (!cached && result.getStatus() != PluginResult.Status.OK.ordinal() && file != null) {
+//                        file.delete();
+//                    }
                     context.sendPluginResult(result);
                 }
             }
         });
-    }
+	}
+
+	private void pause(String objectId) {
+        Log.d(LOG_TAG, "abortUpload: 停止上传任务！");
+        //获取context，并设置aborted为true
+        final RequestContext context;
+        synchronized (activeRequests) {
+            context = activeRequests.get(objectId);
+        }
+        if (context != null) {
+            Log.d(LOG_TAG, "---- 成功停止！");
+            context.paused = true;
+        }
+	}
 
     /**
      * Abort an ongoing upload or download.
