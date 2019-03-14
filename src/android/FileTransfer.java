@@ -882,9 +882,6 @@ public class FileTransfer extends CordovaPlugin {
 
 					if (!cached) {
 						try {
-
-
-
 							synchronized (context) {
 								if (context.aborted) {
 									return;
@@ -912,18 +909,23 @@ public class FileTransfer extends CordovaPlugin {
 								context.sendPluginResult(progressResult);
 							}
 							Log.d(LOG_TAG, "lalala:" + loaded + "," + contentLength);
+							Log.d(LOG_TAG, "文件下载完成");
+							File f;
+							String name ;
 							if (loaded == contentLength) {
-								Log.d(LOG_TAG, "文件下载完成: loaded");
-								File f = resourceApi.mapUriToFile(Uri.parse(targetOrigin));
-								boolean res = file.renameTo(f);
-								if (!res) {
-									Log.d(LOG_TAG, "文件已存在，需先删除");
-									// 先删除后重命名
-									f.delete();
-									file.renameTo(f);
-								} else {
-									Log.d(LOG_TAG, "文件重命名成功");
-								}
+								name = targetOrigin;
+							} else {
+								name = targetOrigin + ".[Range==bytes=0-" + loaded + "=Total==" + contentLength;
+							}
+							f = resourceApi.mapUriToFile(Uri.parse(name));
+							boolean res = file.renameTo(f);
+							if (!res) {
+								Log.d(LOG_TAG, "文件已存在，需先删除");
+								// 先删除后重命名
+								f.delete();
+								file.renameTo(f);
+							} else {
+								Log.d(LOG_TAG, "文件重命名成功:");
 							}
 						} finally {
 							synchronized (context) {
@@ -959,7 +961,7 @@ public class FileTransfer extends CordovaPlugin {
 								if(loaded == contentLength) {
 									result = new PluginResult(PluginResult.Status.OK, fileEntry);
 								} else {
-									//尚未下载完成
+									//尚未下载完成,需对文件重命名
 									result = new PluginResult(PluginResult.Status.OK,
 									progress.toJSONObject());
 								}
