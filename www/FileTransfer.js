@@ -1,4 +1,4 @@
-cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, exports, module) {
+cordova.define("cordova-plugin-file-transfer.FileTransfer", function(require, exports, module) {
 	/*
 	 *
 	 * Licensed to the Apache Software Foundation (ASF) under one
@@ -19,14 +19,14 @@ cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, e
 	 * under the License.
 	 *
 	*/
-
+	
 	/* global cordova, FileSystem */
-
+	
 	var argscheck = require('cordova/argscheck'),
 		exec = require('cordova/exec'),
 		FileTransferError = require('./FileTransferError'),
 		ProgressEvent = require('cordova-plugin-file.ProgressEvent');
-
+	
 	function newProgressEvent(result) {
 		var pe = new ProgressEvent();
 		pe.lengthComputable = result.lengthComputable;
@@ -34,38 +34,38 @@ cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, e
 		pe.total = result.total;
 		return pe;
 	}
-
+	
 	function getUrlCredentials(urlString) {
 		var credentialsPattern = /^https?\:\/\/(?:(?:(([^:@\/]*)(?::([^@\/]*))?)?@)?([^:\/?#]*)(?::(\d*))?).*$/,
 			credentials = credentialsPattern.exec(urlString);
-
+	
 		return credentials && credentials[1];
 	}
-
+	
 	function getBasicAuthHeader(urlString) {
-		var header = null;
-
-
+		var header =  null;
+	
+	
 		// This is changed due to MS Windows doesn't support credentials in http uris
 		// so we detect them by regexp and strip off from result url
 		// Proof: http://social.msdn.microsoft.com/Forums/windowsapps/en-US/a327cf3c-f033-4a54-8b7f-03c56ba3203f/windows-foundation-uri-security-problem
-
+	
 		if (window.btoa) {
 			var credentials = getUrlCredentials(urlString);
 			if (credentials) {
 				var authHeader = "Authorization";
 				var authHeaderValue = "Basic " + window.btoa(credentials);
-
+	
 				header = {
-					name: authHeader,
-					value: authHeaderValue
+					name : authHeader,
+					value : authHeaderValue
 				};
 			}
 		}
-
+	
 		return header;
 	}
-
+	
 	function convertHeadersToArray(headers) {
 		var result = [];
 		for (var header in headers) {
@@ -79,31 +79,49 @@ cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, e
 		}
 		return result;
 	}
-
+	
 	var idCounter = 0;
-
+	
 	/**
 	 * FileTransfer uploads a file to a remote server.
 	 * @constructor
 	 */
-	var FileTransfer = function () {
-		console.log("FileTransfer constructor 222...")
+	var FileTransfer = function(source, target, options, trustAllHosts) {
+		console.log("FileTransfer constructor...")
 		this._id = ++idCounter;
 		this.onprogress = null; // optional callback
+		this.source = source;
+		this.target = target;
+		this.successCallback = null;
+		this.errorCallback = null;
+		this.options = options;
+		this.trustAllHosts = trustAllHosts;
 	};
-
+	
+	FileTransfer.prototype.onProgress = function(prog) {
+		this.onprogress = prog;
+	};
+	
+	FileTransfer.prototype.onSuccess = function(prog) {
+		this.successCallback = prog;
+	};
+	
+	FileTransfer.prototype.onFailure = function(prog) {
+		this.errorCallback = prog;
+	};
+	
 	/**
 	* Given an absolute file path, uploads a file on the device to a remote server
 	* using a multipart HTTP request.
-	* @param filePath {String}           Full path of the file on the device
-	* @param server {String}             URL of the server to receive the file
+	* @param source {String}           Full path of the file on the device
+	* @param target {String}             URL of the server to receive the file
 	* @param successCallback (Function}  Callback to be invoked when upload has completed
 	* @param errorCallback {Function}    Callback to be invoked upon error
 	* @param options {FileUploadOptions} Optional parameters such as file name and mimetype
 	* @param trustAllHosts {Boolean} Optional trust all hosts (e.g. for self-signed certs), defaults to false
 	*/
-	FileTransfer.prototype.upload = function (filePath, server, successCallback, errorCallback, options, trustAllHosts) {
-		argscheck.checkArgs('ssFFO*', 'FileTransfer.upload', arguments);
+	FileTransfer.prototype.upload = function() {
+		// argscheck.checkArgs('ssFFO*', 'FileTransfer.upload', arguments);
 		// check for options
 		var fileKey = null;
 		var fileName = null;
@@ -112,22 +130,22 @@ cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, e
 		var chunkedMode = true;
 		var headers = null;
 		var httpMethod = null;
-		var basicAuthHeader = getBasicAuthHeader(server);
+		var basicAuthHeader = getBasicAuthHeader(this.target);
+		var options = this.options || {};
 		if (basicAuthHeader) {
-			server = server.replace(getUrlCredentials(server) + '@', '');
-
-			options = options || {};
+			this.target = this.target.replace(getUrlCredentials(this.target) + '@', '');
+	
 			options.headers = options.headers || {};
 			options.headers[basicAuthHeader.name] = basicAuthHeader.value;
 		}
-
+	
 		if (options) {
 			fileKey = options.fileKey;
 			fileName = options.fileName;
 			mimeType = options.mimeType;
 			headers = options.headers;
 			httpMethod = options.httpMethod || "POST";
-			if (httpMethod.toUpperCase() == "PUT") {
+			if (httpMethod.toUpperCase() == "PUT"){
 				httpMethod = "PUT";
 			} else {
 				httpMethod = "POST";
@@ -142,50 +160,55 @@ cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, e
 				params = {};
 			}
 		}
-
+	
 		if (cordova.platformId === "windowsphone") {
 			headers = headers && convertHeadersToArray(headers);
 			params = params && convertHeadersToArray(params);
 		}
-
-		var fail = errorCallback && function (e) {
-			var error = new FileTransferError(e.code, e.source, e.target, e.http_status, e.body, e.exception);
-			errorCallback(error);
-		};
-
+		
+		this.business = 'upload';
+	
 		var self = this;
-		var win = function (result) {
+		var fail = this.errorCallback && function(e) {
+			var error = new FileTransferError(e.code, e.source, e.target, e.http_status, e.body, e.exception);
+			self.errorCallback(error);
+		};
+	
+		var win = function(result) {
+			// console.log("进度更新：" + JSON.stringify(result) + "," + !!self.onprogress)
 			if (typeof result.lengthComputable != "undefined") {
 				if (self.onprogress) {
 					self.onprogress(newProgressEvent(result));
 				}
 			} else {
-				if (successCallback) {
+				if (self.successCallback) {
 					//出错则发起重试
+					let response = {};
 					try {
-						let response = result.response;
-						let r = JSON.parse(response);
+						let res = result.response;
+						response = JSON.parse(res);
+						self.options.params.offset = response.rangend;
+	
 						if (response.err_no == 0) {
-							successCallback(response);
+							self.successCallback(response);
 						} else {
-							console.log("上传失败:" + response)
-							if (response.err_code == 1407) {
-								params.offset = response.rangend;
-								exec(win, fail, 'FileTransfer', 'upload', [filePath, server, fileKey, fileName, mimeType, params, trustAllHosts, chunkedMode, headers, this._id, httpMethod]);
+							console.log("上传失败:" + res)
+							if (response.err_no == 1407) {
+								exec(win, fail, 'FileTransfer', 'upload', [self.source, self.target, fileKey, fileName, mimeType, params, self.trustAllHosts, chunkedMode, headers, self._id, httpMethod]);
 							} else {
 								//其他错误
-								errorCallback && errorCallback(r);
+								self.errorCallback && self.errorCallback(response);
 							}
 						}
 					} catch (e) {
-
+						self.errorCallback && self.errorCallback(response);
 					}
 				}
 			}
 		};
-		exec(win, fail, 'FileTransfer', 'upload', [filePath, server, fileKey, fileName, mimeType, params, trustAllHosts, chunkedMode, headers, this._id, httpMethod]);
+		exec(win, fail, 'FileTransfer', 'upload', [self.source, self.target, fileKey, fileName, mimeType, params, self.trustAllHosts, chunkedMode, headers, self._id, httpMethod]);
 	};
-
+	
 	/**
 	 * Downloads a file form a given URL and saves it to the specified directory.
 	 * @param source {String}          URL of the server to receive the file
@@ -195,34 +218,33 @@ cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, e
 	 * @param trustAllHosts {Boolean} Optional trust all hosts (e.g. for self-signed certs), defaults to false
 	 * @param options {FileDownloadOptions} Optional parameters such as headers
 	 */
-	FileTransfer.prototype.download = function (source, target, successCallback, errorCallback, trustAllHosts, options) {
-		argscheck.checkArgs('ssFF*', 'FileTransfer.download', arguments);
+	FileTransfer.prototype.download = function() {
+		// argscheck.checkArgs('ssFF*', 'FileTransfer.download', arguments);
 		var self = this;
-
-		var basicAuthHeader = getBasicAuthHeader(source);
+		var options = this.options || {};
+		var basicAuthHeader = getBasicAuthHeader(this.source);
 		if (basicAuthHeader) {
-			source = source.replace(getUrlCredentials(source) + '@', '');
-
-			options = options || {};
+			this.source = this.source.replace(getUrlCredentials(this.source) + '@', '');
 			options.headers = options.headers || {};
 			options.headers[basicAuthHeader.name] = basicAuthHeader.value;
 		}
-
 		var headers = null;
 		if (options) {
 			headers = options.headers || null;
 		}
-
+	
 		if (cordova.platformId === "windowsphone" && headers) {
 			headers = convertHeadersToArray(headers);
 		}
+		this.business = 'download';
 		console.log("开始下载.........")
-		var win = function (result) {
+		var win = function(result) {
+			// console.log("进度更新：" + JSON.stringify(result) + "," + !!self.onprogress + !!self.successCallback)
 			if (typeof result.lengthComputable != "undefined") {
 				if (self.onprogress) {
 					return self.onprogress(newProgressEvent(result));
 				}
-			} else if (successCallback) {
+			} else if (self.successCallback) {
 				var entry = null;
 				if (result.isDirectory) {
 					entry = new (require('cordova-plugin-file.DirectoryEntry'))();
@@ -236,30 +258,39 @@ cordova.define("cordova-plugin-file-transfer.FileTransfer", function (require, e
 				entry.fullPath = result.fullPath;
 				entry.filesystem = new FileSystem(result.filesystemName || (result.filesystem == window.PERSISTENT ? 'persistent' : 'temporary'));
 				entry.nativeURL = result.nativeURL;
-				successCallback(entry);
+				self.successCallback(entry);
 			}
 		};
-
-		var fail = errorCallback && function (e) {
+	
+		var fail = self.errorCallback && function(e) {
 			var error = new FileTransferError(e.code, e.source, e.target, e.http_status, e.body, e.exception);
-			errorCallback(error);
+			self.errorCallback(error);
 		};
-
-		exec(win, fail, 'FileTransfer', 'download', [source, target, trustAllHosts, this._id, headers, options.start || 0]);
+	
+		exec(win, fail, 'FileTransfer', 'download', [this.source, this.target, this.trustAllHosts, this._id, headers, options.start || 0]);
 	};
-
+	
 	/**
 	 * Aborts the ongoing file transfer on this object. The original error
 	 * callback for the file transfer will be called if necessary.
 	 */
-	FileTransfer.prototype.abort = function () {
+	FileTransfer.prototype.abort = function() {
 		exec(null, null, 'FileTransfer', 'abort', [this._id]);
 	};
-
-	FileTransfer.prototype.pause = function () {
+	
+	FileTransfer.prototype.pause = function() {
 		exec(null, null, 'FileTransfer', 'pause', [this._id]);
 	};
-
+	
+	FileTransfer.prototype.resume = function() {
+		if(this.business == 'download') {
+			this.download();
+		} else {
+			this.upload();
+		}
+	};
+	
 	module.exports = FileTransfer;
-
-});
+	
+	});
+	

@@ -58,973 +58,1004 @@ import android.webkit.CookieManager;
 
 public class FileTransfer extends CordovaPlugin {
 
-    private static final String LOG_TAG = "FileTransfer";
-    private static final String LINE_START = "--";
-    private static final String LINE_END = "\r\n";
-    private static final String BOUNDARY =  "+++++";
+	private static final String LOG_TAG = "FileTransfer";
+	private static final String LINE_START = "--";
+	private static final String LINE_END = "\r\n";
+	private static final String BOUNDARY = "+++++";
 
-    public static int FILE_NOT_FOUND_ERR = 1;
-    public static int INVALID_URL_ERR = 2;
-    public static int CONNECTION_ERR = 3;
-    public static int ABORTED_ERR = 4;
-    public static int NOT_MODIFIED_ERR = 5;
+	public static int FILE_NOT_FOUND_ERR = 1;
+	public static int INVALID_URL_ERR = 2;
+	public static int CONNECTION_ERR = 3;
+	public static int ABORTED_ERR = 4;
+	public static int NOT_MODIFIED_ERR = 5;
 
-    private static HashMap<String, RequestContext> activeRequests = new HashMap<String, RequestContext>();
+	private static HashMap<String, RequestContext> activeRequests = new HashMap<String, RequestContext>();
 	private static final int MAX_BUFFER_SIZE = 16 * 1024;
 
-    private static final class RequestContext {
-        String source;
-        String target;
-        File targetFile;
-        CallbackContext callbackContext;
+	private static final class RequestContext {
+		String source;
+		String target;
+		File targetFile;
+		CallbackContext callbackContext;
 		HttpURLConnection connection;
 		boolean aborted;
 		boolean paused;
 		String business;
 
-        RequestContext(String source, String target, CallbackContext callbackContext) {
-            this.source = source;
-            this.target = target;
-            this.callbackContext = callbackContext;
-        }
-        void sendPluginResult(PluginResult pluginResult) {
-            synchronized (this) {
-                if (!aborted) {
-                    callbackContext.sendPluginResult(pluginResult);
-                }
-            }
-        }
-    }
+		RequestContext(String source, String target, CallbackContext callbackContext) {
+			this.source = source;
+			this.target = target;
+			this.callbackContext = callbackContext;
+		}
 
-    /**
-     * Adds an interface method to an InputStream to return the number of bytes
-     * read from the raw stream. This is used to track total progress against
-     * the HTTP Content-Length header value from the server.
-     */
-    private static abstract class TrackingInputStream extends FilterInputStream {
-      public TrackingInputStream(final InputStream in) {
-        super(in);
-      }
-        public abstract long getTotalRawBytesRead();
-  }
+		void sendPluginResult(PluginResult pluginResult) {
+			synchronized (this) {
+				if (!aborted) {
+					callbackContext.sendPluginResult(pluginResult);
+				}
+			}
+		}
+	}
 
-    private static class ExposedGZIPInputStream extends GZIPInputStream {
-      public ExposedGZIPInputStream(final InputStream in) throws IOException {
-        super(in);
-      }
-      public Inflater getInflater() {
-        return inf;
-      }
-  }
+	/**
+	 * Adds an interface method to an InputStream to return the number of bytes read
+	 * from the raw stream. This is used to track total progress against the HTTP
+	 * Content-Length header value from the server.
+	 */
+	private static abstract class TrackingInputStream extends FilterInputStream {
+		public TrackingInputStream(final InputStream in) {
+			super(in);
+		}
 
-    /**
-     * Provides raw bytes-read tracking for a GZIP input stream. Reports the
-     * total number of compressed bytes read from the input, rather than the
-     * number of uncompressed bytes.
-     */
-    private static class TrackingGZIPInputStream extends TrackingInputStream {
-      private ExposedGZIPInputStream gzin;
-      public TrackingGZIPInputStream(final ExposedGZIPInputStream gzin) throws IOException {
-        super(gzin);
-        this.gzin = gzin;
-      }
-      public long getTotalRawBytesRead() {
-        return gzin.getInflater().getBytesRead();
-      }
-  }
+		public abstract long getTotalRawBytesRead();
+	}
 
-    /**
-     * Provides simple total-bytes-read tracking for an existing InputStream
-     */
-    private static class SimpleTrackingInputStream extends TrackingInputStream {
-        private long bytesRead = 0;
-        public SimpleTrackingInputStream(InputStream stream) {
-            super(stream);
-        }
+	private static class ExposedGZIPInputStream extends GZIPInputStream {
+		public ExposedGZIPInputStream(final InputStream in) throws IOException {
+			super(in);
+		}
 
-        private int updateBytesRead(int newBytesRead) {
-          if (newBytesRead != -1) {
-            bytesRead += newBytesRead;
-          }
-          return newBytesRead;
-        }
+		public Inflater getInflater() {
+			return inf;
+		}
+	}
 
-        @Override
-        public int read() throws IOException {
-            return updateBytesRead(super.read());
-        }
+	/**
+	 * Provides raw bytes-read tracking for a GZIP input stream. Reports the total
+	 * number of compressed bytes read from the input, rather than the number of
+	 * uncompressed bytes.
+	 */
+	private static class TrackingGZIPInputStream extends TrackingInputStream {
+		private ExposedGZIPInputStream gzin;
 
-        // Note: FilterInputStream delegates read(byte[] bytes) to the below method,
-        // so we don't override it or else double count (CB-5631).
-        @Override
-        public int read(byte[] bytes, int offset, int count) throws IOException {
-            return updateBytesRead(super.read(bytes, offset, count));
-        }
+		public TrackingGZIPInputStream(final ExposedGZIPInputStream gzin) throws IOException {
+			super(gzin);
+			this.gzin = gzin;
+		}
 
-        public long getTotalRawBytesRead() {
-          return bytesRead;
-        }
-    }
+		public long getTotalRawBytesRead() {
+			return gzin.getInflater().getBytesRead();
+		}
+	}
 
-    @Override
-    public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
-        if (action.equals("upload") || action.equals("download")) {
-            String source = args.getString(0);
+	/**
+	 * Provides simple total-bytes-read tracking for an existing InputStream
+	 */
+	private static class SimpleTrackingInputStream extends TrackingInputStream {
+		private long bytesRead = 0;
+
+		public SimpleTrackingInputStream(InputStream stream) {
+			super(stream);
+		}
+
+		private int updateBytesRead(int newBytesRead) {
+			if (newBytesRead != -1) {
+				bytesRead += newBytesRead;
+			}
+			return newBytesRead;
+		}
+
+		@Override
+		public int read() throws IOException {
+			return updateBytesRead(super.read());
+		}
+
+		// Note: FilterInputStream delegates read(byte[] bytes) to the below method,
+		// so we don't override it or else double count (CB-5631).
+		@Override
+		public int read(byte[] bytes, int offset, int count) throws IOException {
+			return updateBytesRead(super.read(bytes, offset, count));
+		}
+
+		public long getTotalRawBytesRead() {
+			return bytesRead;
+		}
+	}
+
+	@Override
+	public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
+		if (action.equals("upload") || action.equals("download")) {
+			String source = args.getString(0);
 			String target = args.getString(1);
 
-            if (action.equals("upload")) {
-                upload(source, target, args, callbackContext);
-            } else if(action.equals("download")){
-                download(source, target, args, callbackContext);
-            }
+			if (action.equals("upload")) {
+				upload(source, target, args, callbackContext);
+			} else if (action.equals("download")) {
+				download(source, target, args, callbackContext);
+			}
+			return true;
+		} else if (action.equals("pause")) {
+			String objectId = args.getString(0);
+			pause(objectId);
+			callbackContext.success();
+			return true;
+		} else if (action.equals("abort")) {
+			String objectId = args.getString(0);
+			abort(objectId);
+			callbackContext.success();
+			return true;
+		}
+		return false;
+	}
 
-            return true;
-        } else if (action.equals("pause")) {
-            String objectId = args.getString(0);
-            pause(objectId);
-            callbackContext.success();
-            return true;
-        } else if (action.equals("abort")) {
-            String objectId = args.getString(0);
-            abort(objectId);
-            callbackContext.success();
-            return true;
-        }
-        return false;
-    }
+	private static void addHeadersToRequest(URLConnection connection, JSONObject headers) {
+		try {
+			for (Iterator<?> iter = headers.keys(); iter.hasNext();) {
+				/*
+				 * RFC 2616 says that non-ASCII characters and control characters are not
+				 * allowed in header names or values. Additionally, spaces are not allowed in
+				 * header names. RFC 2046 Quoted-printable encoding may be used to encode
+				 * arbitrary characters, but we donon- not do that encoding here.
+				 */
+				String headerKey = iter.next().toString();
+				String cleanHeaderKey = headerKey.replaceAll("\\n", "").replaceAll("\\s+", "").replaceAll(":", "")
+						.replaceAll("[^\\x20-\\x7E]+", "");
 
-    private static void addHeadersToRequest(URLConnection connection, JSONObject headers) {
-        try {
-            for (Iterator<?> iter = headers.keys(); iter.hasNext(); ) {
-                /* RFC 2616 says that non-ASCII characters and control
-                 * characters are not allowed in header names or values.
-                 * Additionally, spaces are not allowed in header names.
-                 * RFC 2046 Quoted-printable encoding may be used to encode
-                 * arbitrary characters, but we donon- not do that encoding here.
-                 */
-                String headerKey = iter.next().toString();
-                String cleanHeaderKey = headerKey.replaceAll("\\n","")
-                        .replaceAll("\\s+","")
-                        .replaceAll(":", "")
-                        .replaceAll("[^\\x20-\\x7E]+", "");
+				JSONArray headerValues = headers.optJSONArray(headerKey);
+				if (headerValues == null) {
+					headerValues = new JSONArray();
 
-                JSONArray headerValues = headers.optJSONArray(headerKey);
-                if (headerValues == null) {
-                    headerValues = new JSONArray();
+					/*
+					 * RFC 2616 also says that any amount of consecutive linear whitespace within a
+					 * header value can be replaced with a single space character, without affecting
+					 * the meaning of that value.
+					 */
 
-                     /* RFC 2616 also says that any amount of consecutive linear
-                      * whitespace within a header value can be replaced with a
-                      * single space character, without affecting the meaning of
-                      * that value.
-                      */
+					String headerValue = headers.getString(headerKey);
+					String finalValue = headerValue.replaceAll("\\s+", " ").replaceAll("\\n", " ")
+							.replaceAll("[^\\x20-\\x7E]+", " ");
+					headerValues.put(finalValue);
+				}
 
-                    String headerValue = headers.getString(headerKey);
-                    String finalValue = headerValue.replaceAll("\\s+", " ").replaceAll("\\n"," ").replaceAll("[^\\x20-\\x7E]+", " ");
-                    headerValues.put(finalValue);
-                }
+				// Use the clean header key, not the one that we passed in
+				connection.setRequestProperty(cleanHeaderKey, headerValues.getString(0));
+				for (int i = 1; i < headerValues.length(); ++i) {
+					connection.addRequestProperty(headerKey, headerValues.getString(i));
+				}
+			}
+		} catch (JSONException e1) {
+			// No headers to be manipulated!
+		}
+	}
 
-                //Use the clean header key, not the one that we passed in
-                connection.setRequestProperty(cleanHeaderKey, headerValues.getString(0));
-                for (int i = 1; i < headerValues.length(); ++i) {
-                    connection.addRequestProperty(headerKey, headerValues.getString(i));
-                }
-            }
-        } catch (JSONException e1) {
-          // No headers to be manipulated!
-        }
-    }
+	private String getCookies(final String target) {
+		boolean gotCookie = false;
+		String cookie = null;
+		Class webViewClass = webView.getClass();
+		try {
+			Method gcmMethod = webViewClass.getMethod("getCookieManager");
+			Class iccmClass = gcmMethod.getReturnType();
+			Method gcMethod = iccmClass.getMethod("getCookie", String.class);
 
-    private String getCookies(final String target) {
-        boolean gotCookie = false;
-        String cookie = null;
-        Class webViewClass = webView.getClass();
-        try {
-            Method gcmMethod = webViewClass.getMethod("getCookieManager");
-            Class iccmClass  = gcmMethod.getReturnType();
-            Method gcMethod  = iccmClass.getMethod("getCookie", String.class);
+			cookie = (String) gcMethod.invoke(iccmClass.cast(gcmMethod.invoke(webView)), target);
 
-            cookie = (String)gcMethod.invoke(
-                        iccmClass.cast(
-                            gcmMethod.invoke(webView)
-                        ), target);
+			gotCookie = true;
+		} catch (NoSuchMethodException e) {
+		} catch (IllegalAccessException e) {
+		} catch (InvocationTargetException e) {
+		} catch (ClassCastException e) {
+		}
 
-            gotCookie = true;
-        } catch (NoSuchMethodException e) {
-        } catch (IllegalAccessException e) {
-        } catch (InvocationTargetException e) {
-        } catch (ClassCastException e) {
-        }
+		if (!gotCookie && CookieManager.getInstance() != null) {
+			cookie = CookieManager.getInstance().getCookie(target);
+		}
 
-        if (!gotCookie && CookieManager.getInstance() != null) {
-            cookie = CookieManager.getInstance().getCookie(target);
-        }
+		return cookie;
+	}
 
-        return cookie;
-    }
+	/**
+	 * Uploads the specified file to the server URL provided using an HTTP multipart
+	 * request.
+	 * 
+	 * @param source          Full path of the file on the file system
+	 * @param target          URL of the server to receive the file
+	 * @param args            JSON Array of args
+	 * @param callbackContext callback id for optional progress reports
+	 *
+	 *                        args[2] fileKey Name of file request parameter args[3]
+	 *                        fileName File name to be used on server args[4]
+	 *                        mimeType Describes file content type args[5] params
+	 *                        key:value pairs of user-defined parameters
+	 * @return FileUploadResult containing result of upload request
+	 */
+	private void upload(final String source, final String target, JSONArray args, CallbackContext callbackContext)
+			throws JSONException {
+		LOG.d(LOG_TAG, "upload " + source + " to " + target);
 
-    /**
-     * Uploads the specified file to the server URL provided using an HTTP multipart request.
-     * @param source        Full path of the file on the file system
-     * @param target        URL of the server to receive the file
-     * @param args          JSON Array of args
-     * @param callbackContext    callback id for optional progress reports
-     *
-     * args[2] fileKey       Name of file request parameter
-     * args[3] fileName      File name to be used on server
-     * args[4] mimeType      Describes file content type
-     * args[5] params        key:value pairs of user-defined parameters
-     * @return FileUploadResult containing result of upload request
-     */
-    private void upload(final String source, final String target, JSONArray args, CallbackContext callbackContext) throws JSONException {
-        LOG.d(LOG_TAG, "upload " + source + " to " +  target);
-
-        // Setup the options
-        final String fileKey = getArgument(args, 2, "file");
-        final String fileName = getArgument(args, 3, "image.jpg");
-        final String mimeType = getArgument(args, 4, "image/jpeg");
-        final JSONObject params = args.optJSONObject(5) == null ? new JSONObject() : args.optJSONObject(5);
-        // Always use chunked mode unless set to false as per API
-        final boolean chunkedMode = args.optBoolean(7) || args.isNull(7);
-        // Look for headers on the params map for backwards compatibility with older Cordova versions.
-        final JSONObject headers = args.optJSONObject(8) == null ? params.optJSONObject("headers") : args.optJSONObject(8);
-        final String objectId = args.getString(9);
-        final String httpMethod = getArgument(args, 10, "POST");
+		// Setup the options
+		final String fileKey = getArgument(args, 2, "file");
+		final String fileName = getArgument(args, 3, "image.jpg");
+		final String mimeType = getArgument(args, 4, "image/jpeg");
+		final JSONObject params = args.optJSONObject(5) == null ? new JSONObject() : args.optJSONObject(5);
+		// Always use chunked mode unless set to false as per API
+		final boolean chunkedMode = args.optBoolean(7) || args.isNull(7);
+		// Look for headers on the params map for backwards compatibility with older
+		// Cordova versions.
+		final JSONObject headers = args.optJSONObject(8) == null ? params.optJSONObject("headers")
+				: args.optJSONObject(8);
+		final String objectId = args.getString(9);
+		final String httpMethod = getArgument(args, 10, "POST");
 		final int offset = params.optInt("offset", 0);
-        final CordovaResourceApi resourceApi = webView.getResourceApi();
-        Log.d(LOG_TAG, "上传偏移量: " + offset);
-        LOG.d(LOG_TAG, "fileKey: " + fileKey);
-        LOG.d(LOG_TAG, "fileName: " + fileName);
-        LOG.d(LOG_TAG, "mimeType: " + mimeType);
-        LOG.d(LOG_TAG, "params: " + params);
-        LOG.d(LOG_TAG, "chunkedMode: " + chunkedMode);
-        LOG.d(LOG_TAG, "headers: " + headers);
-        LOG.d(LOG_TAG, "objectId: " + objectId);
-        LOG.d(LOG_TAG, "httpMethod: " + httpMethod);
+		final CordovaResourceApi resourceApi = webView.getResourceApi();
+		Log.d(LOG_TAG, "上传偏移量: " + offset);
+		LOG.d(LOG_TAG, "fileKey: " + fileKey);
+		LOG.d(LOG_TAG, "fileName: " + fileName);
+		LOG.d(LOG_TAG, "mimeType: " + mimeType);
+		LOG.d(LOG_TAG, "params: " + params);
+		LOG.d(LOG_TAG, "chunkedMode: " + chunkedMode);
+		LOG.d(LOG_TAG, "headers: " + headers);
+		LOG.d(LOG_TAG, "objectId: " + objectId);
+		LOG.d(LOG_TAG, "httpMethod: " + httpMethod);
 
-        final Uri targetUri = resourceApi.remapUri(Uri.parse(target));
+		final Uri targetUri = resourceApi.remapUri(Uri.parse(target));
 
-        int uriType = CordovaResourceApi.getUriType(targetUri);
-        final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
-        if (uriType != CordovaResourceApi.URI_TYPE_HTTP && !useHttps) {
-            JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target, null, 0, null);
-            LOG.e(LOG_TAG, "Unsupported URI: " + targetUri);
-            callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
-            return;
-        }
+		int uriType = CordovaResourceApi.getUriType(targetUri);
+		final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
+		if (uriType != CordovaResourceApi.URI_TYPE_HTTP && !useHttps) {
+			JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target, null, 0, null);
+			LOG.e(LOG_TAG, "Unsupported URI: " + targetUri);
+			callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+			return;
+		}
 
-        final RequestContext context = new RequestContext(source, target, callbackContext);
-        synchronized (activeRequests) {
-            activeRequests.put(objectId, context);
-        }
-        context.business = "upload";
+		final RequestContext context = new RequestContext(source, target, callbackContext);
+		synchronized (activeRequests) {
+			activeRequests.put(objectId, context);
+		}
+		context.business = "upload";
 
-        cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                //删除时先不终止进程
-                 if (context.aborted) {
-                     return;
-                 }
+		cordova.getThreadPool().execute(new Runnable() {
+			public void run() {
+				// 删除时先不终止进程
+				if (context.aborted || context.paused) {
+					return;
+				}
 
-                // We should call remapUri on background thread otherwise it throws
-                // IllegalStateException when trying to remap 'cdvfile://localhost/content/...' URIs
-                // via ContentFilesystem (see https://issues.apache.org/jira/browse/CB-9022)
-                Uri tmpSrc = Uri.parse(source);
-                final Uri sourceUri = resourceApi.remapUri(
-                        tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
+				// We should call remapUri on background thread otherwise it throws
+				// IllegalStateException when trying to remap 'cdvfile://localhost/content/...'
+				// URIs
+				// via ContentFilesystem (see https://issues.apache.org/jira/browse/CB-9022)
+				Uri tmpSrc = Uri.parse(source);
+				final Uri sourceUri = resourceApi
+						.remapUri(tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
 
-                HttpURLConnection conn = null;
-                int totalBytes = 0;
+				HttpURLConnection conn = null;
+				int totalBytes = 0;
 				int fixedLength = -1;
 				int contentLength = -1;
-                try {
-                    // Create return object
-                    FileUploadResult result = new FileUploadResult();
-                    FileProgressResult progress = new FileProgressResult();
+				try {
+					// Create return object
+					FileUploadResult result = new FileUploadResult();
+					FileProgressResult progress = new FileProgressResult();
 
-                    //------------------ CLIENT REQUEST
-                    // Open a HTTP connection to the URL based on protocol
-                    conn = resourceApi.createHttpConnection(targetUri);
+					// ------------------ CLIENT REQUEST
+					// Open a HTTP connection to the URL based on protocol
+					conn = resourceApi.createHttpConnection(targetUri);
 
-                    // Allow Inputs
-                    conn.setDoInput(true);
+					// Allow Inputs
+					conn.setDoInput(true);
 
-                    // Allow Outputs
-                    conn.setDoOutput(true);
+					// Allow Outputs
+					conn.setDoOutput(true);
 
-                    // Don't use a cached copy.
-                    conn.setUseCaches(false);
+					// Don't use a cached copy.
+					conn.setUseCaches(false);
 
-                    // Use a post method.
-                    conn.setRequestMethod(httpMethod);
+					// Use a post method.
+					conn.setRequestMethod(httpMethod);
 
-                    // if we specified a Content-Type header, don't do multipart form upload
-                    boolean multipartFormUpload = (headers == null) || !headers.has("Content-Type");
-                    if (multipartFormUpload) {
-                        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + BOUNDARY);
-                    }
+					// if we specified a Content-Type header, don't do multipart form upload
+					boolean multipartFormUpload = (headers == null) || !headers.has("Content-Type");
+					if (multipartFormUpload) {
+						conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + BOUNDARY);
+					}
 
-                    // Set the cookies on the response
-                    String cookie = getCookies(target);
+					// Set the cookies on the response
+					String cookie = getCookies(target);
 
-                    if (cookie != null) {
-                        conn.setRequestProperty("Cookie", cookie);
-                    }
+					if (cookie != null) {
+						conn.setRequestProperty("Cookie", cookie);
+					}
 
-                    // Handle the other headers
-                    if (headers != null) {
-                        addHeadersToRequest(conn, headers);
-                    }
+					// Handle the other headers
+					if (headers != null) {
+						addHeadersToRequest(conn, headers);
+					}
 
-                    /*
-                        * Store the non-file portions of the multipart data as a string, so that we can add it
-                        * to the contentSize, since it is part of the body of the HTTP request.
-                        */
-                    StringBuilder beforeData = new StringBuilder();
-                    try {
-                        for (Iterator<?> iter = params.keys(); iter.hasNext();) {
-                            Object key = iter.next();
-                            if(!String.valueOf(key).equals("headers") && !String.valueOf(key).equals("offset"))
-                            {
-                              beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
-                              beforeData.append("Content-Disposition: form-data; name=\"").append(key.toString()).append('"');
-                              beforeData.append(LINE_END).append(LINE_END);
-                              beforeData.append(params.getString(key.toString()));
-                              beforeData.append(LINE_END);
-                            }
-                        }
-                    } catch (JSONException e) {
-                        LOG.e(LOG_TAG, e.getMessage(), e);
-                    }
+					/*
+					 * Store the non-file portions of the multipart data as a string, so that we can
+					 * add it to the contentSize, since it is part of the body of the HTTP request.
+					 */
+					StringBuilder beforeData = new StringBuilder();
+					try {
+						for (Iterator<?> iter = params.keys(); iter.hasNext();) {
+							Object key = iter.next();
+							if (!String.valueOf(key).equals("headers") && !String.valueOf(key).equals("offset")) {
+								beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
+								beforeData.append("Content-Disposition: form-data; name=\"").append(key.toString())
+										.append('"');
+								beforeData.append(LINE_END).append(LINE_END);
+								beforeData.append(params.getString(key.toString()));
+								beforeData.append(LINE_END);
+							}
+						}
+					} catch (JSONException e) {
+						LOG.e(LOG_TAG, e.getMessage(), e);
+					}
 
-                    // setFixedLengthStreamingMode causes and OutOfMemoryException on pre-Froyo devices.
-                    // http://code.google.com/p/android/issues/detail?id=3164
-                    // It also causes OOM if HTTPS is used, even on newer devices.
-                    boolean useChunkedMode = chunkedMode || (Build.VERSION.SDK_INT < Build.VERSION_CODES.FROYO);
-                    useChunkedMode = useChunkedMode || (fixedLength == -1);
+					// setFixedLengthStreamingMode causes and OutOfMemoryException on pre-Froyo
+					// devices.
+					// http://code.google.com/p/android/issues/detail?id=3164
+					// It also causes OOM if HTTPS is used, even on newer devices.
+					boolean useChunkedMode = chunkedMode || (Build.VERSION.SDK_INT < Build.VERSION_CODES.FROYO);
+					useChunkedMode = useChunkedMode || (fixedLength == -1);
 
-                    // Get a input stream of the file on the phone
-                    OpenForReadResult readResult = resourceApi.openForRead(sourceUri);
-                    if (readResult.length >= 0) {
-                        fixedLength = (int)readResult.length;
-                        contentLength = fixedLength;
-                        Log.d(LOG_TAG, "读到文件长度：" + contentLength);
-//                        if (multipartFormUpload)
-//                            fixedLength += stringLength;
-                        progress.setLengthComputable(true);
-                        progress.setTotal(contentLength);
-                    }
-                    //数据读取完毕,写入长度数据
-                    if (useChunkedMode) {
-                        beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
-                        beforeData.append("Content-Disposition: form-data; name=\"").append("range").append('"');
-                        beforeData.append(LINE_END).append(LINE_END);
-                        beforeData.append(offset + "-" + (contentLength - 1) + "-" +  contentLength);
-                        beforeData.append(LINE_END);
-                    }
+					// Get a input stream of the file on the phone
+					OpenForReadResult readResult = resourceApi.openForRead(sourceUri);
+					if (readResult.length >= 0) {
+						fixedLength = (int) readResult.length;
+						contentLength = fixedLength;
+						Log.d(LOG_TAG, "读到文件长度：" + contentLength);
+						// if (multipartFormUpload)
+						// fixedLength += stringLength;
+						progress.setLengthComputable(true);
+						progress.setTotal(contentLength);
+					}
+					// 数据读取完毕,写入长度数据
+					if (useChunkedMode) {
+						beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
+						beforeData.append("Content-Disposition: form-data; name=\"").append("range").append('"');
+						beforeData.append(LINE_END).append(LINE_END);
+						beforeData.append(offset + "-" + (contentLength - 1) + "-" + contentLength);
+						beforeData.append(LINE_END);
+					}
 
-                    beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
-                    beforeData.append("Content-Disposition: form-data; name=\"").append(fileKey).append("\";");
-                    beforeData.append(" filename=\"").append(fileName).append('"').append(LINE_END);
-                    beforeData.append("Content-Type: ").append(mimeType).append(LINE_END).append(LINE_END);
+					beforeData.append(LINE_START).append(BOUNDARY).append(LINE_END);
+					beforeData.append("Content-Disposition: form-data; name=\"").append(fileKey).append("\";");
+					beforeData.append(" filename=\"").append(fileName).append('"').append(LINE_END);
+					beforeData.append("Content-Type: ").append(mimeType).append(LINE_END).append(LINE_END);
 
-                    byte[] beforeDataBytes = beforeData.toString().getBytes("UTF-8");
-                    byte[] tailParamsBytes = (LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END).getBytes("UTF-8");
+					byte[] beforeDataBytes = beforeData.toString().getBytes("UTF-8");
+					byte[] tailParamsBytes = (LINE_END + LINE_START + BOUNDARY + LINE_START + LINE_END)
+							.getBytes("UTF-8");
 
+					int stringLength = beforeDataBytes.length + tailParamsBytes.length;
+					if (readResult.length >= 0) {
+						// fixedLength = (int)readResult.length;
+						// contentLength = fixedLength;
+						if (multipartFormUpload)
+							fixedLength += stringLength;
+						// progress.setLengthComputable(true);
+						// progress.setTotal(contentLength);
+					}
+					LOG.d(LOG_TAG, "Content Length: " + fixedLength);
 
+					if (useChunkedMode) {
+						conn.setChunkedStreamingMode(MAX_BUFFER_SIZE);
+						// Although setChunkedStreamingMode sets this header, setting it explicitly here
+						// works
+						// around an OutOfMemoryException when using https.
+						// 只是借用chunk传输模式，自定义后端接收数据
+						conn.setRequestProperty("Transfer-Encoding", "chunked");
+					} else {
+						conn.setFixedLengthStreamingMode(fixedLength);
 
-                    int stringLength = beforeDataBytes.length + tailParamsBytes.length;
-                    if (readResult.length >= 0) {
-//						fixedLength = (int)readResult.length;
-//						contentLength = fixedLength;
-                        if (multipartFormUpload)
-                            fixedLength += stringLength;
-//                        progress.setLengthComputable(true);
-//                        progress.setTotal(contentLength);
-                    }
-                    LOG.d(LOG_TAG, "Content Length: " + fixedLength);
+						if (useHttps) {
+							LOG.w(LOG_TAG,
+									"setFixedLengthStreamingMode could cause OutOfMemoryException - switch to chunkedMode=true to avoid it if this is an issue.");
+						}
+					}
 
-
-                    if (useChunkedMode) {
-                        conn.setChunkedStreamingMode(MAX_BUFFER_SIZE);
-                        // Although setChunkedStreamingMode sets this header, setting it explicitly here works
-                        // around an OutOfMemoryException when using https.
-                        //只是借用chunk传输模式，自定义后端接收数据
-                        conn.setRequestProperty("Transfer-Encoding", "chunked");
-                    } else {
-                        conn.setFixedLengthStreamingMode(fixedLength);
-
-                        if (useHttps) {
-                            LOG.w(LOG_TAG, "setFixedLengthStreamingMode could cause OutOfMemoryException - switch to chunkedMode=true to avoid it if this is an issue.");
-                        }
-                    }
-
-                    conn.connect();
+					conn.connect();
 
 					OutputStream sendStream = null;
 					int accumulateOffset = offset;
-                    try {
-                        sendStream = conn.getOutputStream();
-                        synchronized (context) {
-                            if (context.aborted) {
-                                return;
-                            }
-                            context.connection = conn;
-                        }
+					try {
+						sendStream = conn.getOutputStream();
+						synchronized (context) {
+							if (context.aborted || context.paused) {
+								return;
+							}
+							context.connection = conn;
+						}
 
-                        if (multipartFormUpload) {
-                            //We don't want to change encoding, we just want this to write for all Unicode.
-                            sendStream.write(beforeDataBytes);
-                            totalBytes += beforeDataBytes.length;
-                        }
+						if (multipartFormUpload) {
+							// We don't want to change encoding, we just want this to write for all Unicode.
+							sendStream.write(beforeDataBytes);
+							totalBytes += beforeDataBytes.length;
+						}
 
-                        //由于offset，需要跳过前面的字段
-                        readResult.inputStream.skip(offset);
-                        // create a buffer of maximum size
-                        int bytesAvailable = readResult.inputStream.available();
-                        int bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
-                        byte[] buffer = new byte[bufferSize];
+						// 由于offset，需要跳过前面的字段
+						readResult.inputStream.skip(offset);
+						// create a buffer of maximum size
+						int bytesAvailable = readResult.inputStream.available();
+						int bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
+						byte[] buffer = new byte[bufferSize];
 
-                        // read file and write it into form...
-                        int bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
+						// read file and write it into form...
+						int bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
 
 						long prevBytesRead = 0;
-                        while (bytesRead > 0) {
-                            //暂停，停止读数据...
-                            if (context.paused) {
-                                break;
-                            }
-                            totalBytes += bytesRead;
-                            //累计发送长度
-                            accumulateOffset += bytesRead;
-                            result.setBytesSent(totalBytes);
-                            sendStream.write(buffer, 0, bytesRead);
-                            if (totalBytes > prevBytesRead + 102400) {
-                                prevBytesRead = totalBytes;
-                            }
-                            bytesAvailable = readResult.inputStream.available();
-                            bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
-                            bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
-                            LOG.d(LOG_TAG, "Uploaded " + accumulateOffset + " of " + contentLength + " bytes");
-                            // Send a progress event.
-                            //此处进度只计算纯数据进度
-                            progress.setLoaded(accumulateOffset);
-                            PluginResult progressResult = new PluginResult(PluginResult.Status.OK, progress.toJSONObject());
-                            progressResult.setKeepCallback(true);
-                            context.sendPluginResult(progressResult);
-                        }
-						
+						while (bytesRead > 0) {
+							// 暂停，停止读数据...
+							if (context.paused) {
+								break;
+							}
+							totalBytes += bytesRead;
+							// 累计发送长度
+							accumulateOffset += bytesRead;
+							result.setBytesSent(totalBytes);
+							sendStream.write(buffer, 0, bytesRead);
+							if (totalBytes > prevBytesRead + 102400) {
+								prevBytesRead = totalBytes;
+							}
+							bytesAvailable = readResult.inputStream.available();
+							bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
+							bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
+							LOG.d(LOG_TAG, "Uploaded " + accumulateOffset + " of " + contentLength + " bytes");
+							// Send a progress event.
+							// 此处进度只计算纯数据进度
+							progress.setLoaded(accumulateOffset);
+							PluginResult progressResult = new PluginResult(PluginResult.Status.OK,
+									progress.toJSONObject());
+							progressResult.setKeepCallback(true);
+							context.sendPluginResult(progressResult);
+						}
+
 						if (multipartFormUpload) {
-                            Log.d(LOG_TAG, "Multipart form upload......");
-                            // send multipart form data necessary after file data...
-                            sendStream.write(tailParamsBytes);
-                            //前面已经加过了
-//                            totalBytes += tailParamsBytes.length;
-                        }
+							Log.d(LOG_TAG, "Multipart form upload......");
+							// send multipart form data necessary after file data...
+							sendStream.write(tailParamsBytes);
+							// 前面已经加过了
+							// totalBytes += tailParamsBytes.length;
+						}
 
-                        sendStream.flush();
-                    } finally {
-                        safeClose(readResult.inputStream);
-                        safeClose(sendStream);
-                    }
-                    synchronized (context) {
-                        context.connection = null;
-                    }
-                    LOG.d(LOG_TAG, "Sent " + totalBytes + " of " + fixedLength);
-                    LOG.d(LOG_TAG, "Sent raw bytes " + accumulateOffset + " of " + contentLength + "from offset " + offset);
+						sendStream.flush();
+					} finally {
+						safeClose(readResult.inputStream);
+						safeClose(sendStream);
+					}
+					synchronized (context) {
+						context.connection = null;
+					}
+					LOG.d(LOG_TAG, "Sent " + totalBytes + " of " + fixedLength);
+					LOG.d(LOG_TAG,
+							"Sent raw bytes " + accumulateOffset + " of " + contentLength + "from offset " + offset);
 
-                    //------------------ read the SERVER RESPONSE
-                    String responseString;
-                    int responseCode = conn.getResponseCode();
-                    LOG.d(LOG_TAG, "response code: " + responseCode);
-                    LOG.d(LOG_TAG, "response headers: " + conn.getHeaderFields());
-                    TrackingInputStream inStream = null;
-                    try {
-                        inStream = getInputStream(conn);
-                         synchronized (context) {
-                             if (context.aborted) {
-                                 return;
-                             }
-                             context.connection = conn;
-                         }
+					// ------------------ read the SERVER RESPONSE
+					String responseString;
+					int responseCode = conn.getResponseCode();
+					LOG.d(LOG_TAG, "response code: " + responseCode);
+					LOG.d(LOG_TAG, "response headers: " + conn.getHeaderFields());
+					TrackingInputStream inStream = null;
+					try {
+						inStream = getInputStream(conn);
+						synchronized (context) {
+							if (context.aborted) {
+								return;
+							}
+							context.connection = conn;
+						}
 
-                        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, conn.getContentLength()));
-                        byte[] buffer = new byte[1024];
-                        int bytesRead = 0;
-                        // write bytes to file
-                        while ((bytesRead = inStream.read(buffer)) > 0) {
-                            out.write(buffer, 0, bytesRead);
-                        }
-                        responseString = out.toString("UTF-8");
-                    } finally {
-                        synchronized (context) {
-                            context.connection = null;
-                        }
-                        safeClose(inStream);
-                    }
+						ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, conn.getContentLength()));
+						byte[] buffer = new byte[1024];
+						int bytesRead = 0;
+						// write bytes to file
+						while ((bytesRead = inStream.read(buffer)) > 0) {
+							out.write(buffer, 0, bytesRead);
+						}
+						responseString = out.toString("UTF-8");
+					} finally {
+						synchronized (context) {
+							context.connection = null;
+						}
+						safeClose(inStream);
+					}
 
-                    LOG.d(LOG_TAG, "got response from server");
-                    LOG.d(LOG_TAG, responseString.substring(0, Math.min(256, responseString.length())));
+					LOG.d(LOG_TAG, "got response from server");
+					LOG.d(LOG_TAG, responseString.substring(0, Math.min(256, responseString.length())));
 
-                    // send request and retrieve response
-                    result.setResponseCode(responseCode);
-                    result.setResponse(responseString);
-                    Log.d(LOG_TAG, "runrunrun: " + responseCode);
-                    context.sendPluginResult(new PluginResult(PluginResult.Status.OK, result.toJSONObject()));
-                } catch (FileNotFoundException e) {
-                    JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, conn, e);
-                    LOG.e(LOG_TAG, error.toString(), e);
-                    context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
-                } catch (IOException e) {
-                    JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, conn, e);
-                    LOG.e(LOG_TAG, error.toString(), e);
-                    LOG.e(LOG_TAG, "Failed after uploading " + totalBytes + " of " + fixedLength + " bytes.");
-                    context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
-                } catch (JSONException e) {
-                    LOG.e(LOG_TAG, e.getMessage(), e);
-                    context.sendPluginResult(new PluginResult(PluginResult.Status.JSON_EXCEPTION));
-                } catch (Throwable t) {
-                    // Shouldn't happen, but will
-                    JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, conn, t);
-                    LOG.e(LOG_TAG, error.toString(), t);
-                    context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
-                } finally {
-                    synchronized (activeRequests) {
-                        activeRequests.remove(objectId);
-                    }
-                }
-            }
-        });
-    }
+					// send request and retrieve response
+					result.setResponseCode(responseCode);
+					result.setResponse(responseString);
+					Log.d(LOG_TAG, "runrunrun: " + result);
+					context.sendPluginResult(new PluginResult(PluginResult.Status.OK, result.toJSONObject()));
+				} catch (FileNotFoundException e) {
+					JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, conn, e);
+					LOG.e(LOG_TAG, error.toString(), e);
+					context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+				} catch (IOException e) {
+					JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, conn, e);
+					LOG.e(LOG_TAG, error.toString(), e);
+					LOG.e(LOG_TAG, "Failed after uploading " + totalBytes + " of " + fixedLength + " bytes.");
+					context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+				} catch (JSONException e) {
+					LOG.e(LOG_TAG, e.getMessage(), e);
+					context.sendPluginResult(new PluginResult(PluginResult.Status.JSON_EXCEPTION));
+				} catch (Throwable t) {
+					// Shouldn't happen, but will
+					JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, conn, t);
+					LOG.e(LOG_TAG, error.toString(), t);
+					context.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+				} finally {
+					synchronized (activeRequests) {
+						activeRequests.remove(objectId);
+					}
+				}
+			}
+		});
+	}
 
-    private static void safeClose(Closeable stream) {
-        if (stream != null) {
-            try {
-                stream.close();
-            } catch (IOException e) {
-            }
-        }
-    }
+	private static void safeClose(Closeable stream) {
+		if (stream != null) {
+			try {
+				stream.close();
+			} catch (IOException e) {
+			}
+		}
+	}
 
-    private static TrackingInputStream getInputStream(URLConnection conn) throws IOException {
-        String encoding = conn.getContentEncoding();
-        if (encoding != null && encoding.equalsIgnoreCase("gzip")) {
-          return new TrackingGZIPInputStream(new ExposedGZIPInputStream(conn.getInputStream()));
-        }
-        return new SimpleTrackingInputStream(conn.getInputStream());
-    }
+	private static TrackingInputStream getInputStream(URLConnection conn) throws IOException {
+		String encoding = conn.getContentEncoding();
+		if (encoding != null && encoding.equalsIgnoreCase("gzip")) {
+			return new TrackingGZIPInputStream(new ExposedGZIPInputStream(conn.getInputStream()));
+		}
+		return new SimpleTrackingInputStream(conn.getInputStream());
+	}
 
-    private static JSONObject createFileTransferError(int errorCode, String source, String target, URLConnection connection, Throwable throwable) {
+	private static JSONObject createFileTransferError(int errorCode, String source, String target,
+			URLConnection connection, Throwable throwable) {
 
-        int httpStatus = 0;
-        StringBuilder bodyBuilder = new StringBuilder();
-        String body = null;
-        if (connection != null) {
-            try {
-                if (connection instanceof HttpURLConnection) {
-                    httpStatus = ((HttpURLConnection)connection).getResponseCode();
-                    InputStream err = ((HttpURLConnection) connection).getErrorStream();
-                    if(err != null)
-                    {
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(err, "UTF-8"));
-                        try {
-                            String line = reader.readLine();
-                            while(line != null) {
-                                bodyBuilder.append(line);
-                                line = reader.readLine();
-                                if(line != null) {
-                                    bodyBuilder.append('\n');
-                                }
-                            }
-                            body = bodyBuilder.toString();
-                        } finally {
-                            reader.close();
-                        }
-                    }
-                }
-            // IOException can leave connection object in a bad state, so catch all exceptions.
-            } catch (Throwable e) {
-                LOG.w(LOG_TAG, "Error getting HTTP status code from connection.", e);
-            }
-        }
+		int httpStatus = 0;
+		StringBuilder bodyBuilder = new StringBuilder();
+		String body = null;
+		if (connection != null) {
+			try {
+				if (connection instanceof HttpURLConnection) {
+					httpStatus = ((HttpURLConnection) connection).getResponseCode();
+					InputStream err = ((HttpURLConnection) connection).getErrorStream();
+					if (err != null) {
+						BufferedReader reader = new BufferedReader(new InputStreamReader(err, "UTF-8"));
+						try {
+							String line = reader.readLine();
+							while (line != null) {
+								bodyBuilder.append(line);
+								line = reader.readLine();
+								if (line != null) {
+									bodyBuilder.append('\n');
+								}
+							}
+							body = bodyBuilder.toString();
+						} finally {
+							reader.close();
+						}
+					}
+				}
+				// IOException can leave connection object in a bad state, so catch all
+				// exceptions.
+			} catch (Throwable e) {
+				LOG.w(LOG_TAG, "Error getting HTTP status code from connection.", e);
+			}
+		}
 
-        return createFileTransferError(errorCode, source, target, body, httpStatus, throwable);
-    }
+		return createFileTransferError(errorCode, source, target, body, httpStatus, throwable);
+	}
 
-        /**
-        * Create an error object based on the passed in errorCode
-        * @param errorCode      the error
-        * @return JSONObject containing the error
-        */
-    private static JSONObject createFileTransferError(int errorCode, String source, String target, String body, Integer httpStatus, Throwable throwable) {
-        JSONObject error = null;
-        try {
-            error = new JSONObject();
-            error.put("code", errorCode);
-            error.put("source", source);
-            error.put("target", target);
-            if(body != null)
-            {
-                error.put("body", body);
-            }
-            if (httpStatus != null) {
-                error.put("http_status", httpStatus);
-            }
-            if (throwable != null) {
-                String msg = throwable.getMessage();
-                if (msg == null || "".equals(msg)) {
-                    msg = throwable.toString();
-                }
-                error.put("exception", msg);
-            }
-        } catch (JSONException e) {
-            LOG.e(LOG_TAG, e.getMessage(), e);
-        }
-        return error;
-    }
+	/**
+	 * Create an error object based on the passed in errorCode
+	 * 
+	 * @param errorCode the error
+	 * @return JSONObject containing the error
+	 */
+	private static JSONObject createFileTransferError(int errorCode, String source, String target, String body,
+			Integer httpStatus, Throwable throwable) {
+		JSONObject error = null;
+		try {
+			error = new JSONObject();
+			error.put("code", errorCode);
+			error.put("source", source);
+			error.put("target", target);
+			if (body != null) {
+				error.put("body", body);
+			}
+			if (httpStatus != null) {
+				error.put("http_status", httpStatus);
+			}
+			if (throwable != null) {
+				String msg = throwable.getMessage();
+				if (msg == null || "".equals(msg)) {
+					msg = throwable.toString();
+				}
+				error.put("exception", msg);
+			}
+		} catch (JSONException e) {
+			LOG.e(LOG_TAG, e.getMessage(), e);
+		}
+		return error;
+	}
 
-    /**
-     * Convenience method to read a parameter from the list of JSON args.
-     * @param args                      the args passed to the Plugin
-     * @param position          the position to retrieve the arg from
-     * @param defaultString the default to be used if the arg does not exist
-     * @return String with the retrieved value
-     */
-    private static String getArgument(JSONArray args, int position, String defaultString) {
-        String arg = defaultString;
-        if (args.length() > position) {
-            arg = args.optString(position);
-            if (arg == null || "null".equals(arg)) {
-                arg = defaultString;
-            }
-        }
-        return arg;
-    }
+	/**
+	 * Convenience method to read a parameter from the list of JSON args.
+	 * 
+	 * @param args          the args passed to the Plugin
+	 * @param position      the position to retrieve the arg from
+	 * @param defaultString the default to be used if the arg does not exist
+	 * @return String with the retrieved value
+	 */
+	private static String getArgument(JSONArray args, int position, String defaultString) {
+		String arg = defaultString;
+		if (args.length() > position) {
+			arg = args.optString(position);
+			if (arg == null || "null".equals(arg)) {
+				arg = defaultString;
+			}
+		}
+		return arg;
+	}
 
-    /**
-     * Downloads a file form a given URL and saves it to the specified directory.
-     *
-     * @param source        URL of the server to receive the file
-     * @param targetOrigin            Full path of the file on the file system
-     */
-    private void download(final String source, final String targetOrigin, JSONArray args, CallbackContext callbackContext) throws JSONException {
-        LOG.d(LOG_TAG, "download " + source + " to " +  targetOrigin);
-        final String target = targetOrigin + ".downloading";
-        final CordovaResourceApi resourceApi = webView.getResourceApi();
+	/**
+	 * Downloads a file form a given URL and saves it to the specified directory.
+	 *
+	 * @param source       URL of the server to receive the file
+	 * @param targetOrigin Full path of the file on the file system
+	 */
+	private void download(final String source, final String targetOrigin, JSONArray args,
+			CallbackContext callbackContext) throws JSONException {
+		LOG.d(LOG_TAG, "download " + source + " to " + targetOrigin);
+		final String target = targetOrigin + ".downloading";
+		final CordovaResourceApi resourceApi = webView.getResourceApi();
 
-        final String objectId = args.getString(3);
-        final JSONObject headers = args.optJSONObject(4);
+		final String objectId = args.getString(3);
+		final JSONObject headers = args.optJSONObject(4);
 
-        final Uri sourceUri = resourceApi.remapUri(Uri.parse(source));
-        int uriType = CordovaResourceApi.getUriType(sourceUri);
-        final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
-        final boolean isLocalTransfer = !useHttps && uriType != CordovaResourceApi.URI_TYPE_HTTP;
-        if (uriType == CordovaResourceApi.URI_TYPE_UNKNOWN) {
-            JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target, null, 0, null);
-            LOG.e(LOG_TAG, "Unsupported URI: " + sourceUri);
-            callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
-            return;
-        }
+		final Uri sourceUri = resourceApi.remapUri(Uri.parse(source));
+		int uriType = CordovaResourceApi.getUriType(sourceUri);
+		final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
+		final boolean isLocalTransfer = !useHttps && uriType != CordovaResourceApi.URI_TYPE_HTTP;
+		if (uriType == CordovaResourceApi.URI_TYPE_UNKNOWN) {
+			JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target, null, 0, null);
+			LOG.e(LOG_TAG, "Unsupported URI: " + sourceUri);
+			callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+			return;
+		}
 
-        /* This code exists for compatibility between 3.x and 4.x versions of Cordova.
-         * Previously the CordovaWebView class had a method, getWhitelist, which would
-         * return a Whitelist object. Since the fixed whitelist is removed in Cordova 4.x,
-         * the correct call now is to shouldAllowRequest from the plugin manager.
-         */
-        Boolean shouldAllowRequest = null;
-        if (isLocalTransfer) {
-            shouldAllowRequest = true;
-        }
-        if (shouldAllowRequest == null) {
-            try {
-                Method gwl = webView.getClass().getMethod("getWhitelist");
-                Whitelist whitelist = (Whitelist)gwl.invoke(webView);
-                shouldAllowRequest = whitelist.isUrlWhiteListed(source);
-            } catch (NoSuchMethodException e) {
-            } catch (IllegalAccessException e) {
-            } catch (InvocationTargetException e) {
-            }
-        }
-        if (shouldAllowRequest == null) {
-            try {
-                Method gpm = webView.getClass().getMethod("getPluginManager");
-                PluginManager pm = (PluginManager)gpm.invoke(webView);
-                Method san = pm.getClass().getMethod("shouldAllowRequest", String.class);
-                shouldAllowRequest = (Boolean)san.invoke(pm, source);
-            } catch (NoSuchMethodException e) {
-            } catch (IllegalAccessException e) {
-            } catch (InvocationTargetException e) {
-            }
-        }
+		/*
+		 * This code exists for compatibility between 3.x and 4.x versions of Cordova.
+		 * Previously the CordovaWebView class had a method, getWhitelist, which would
+		 * return a Whitelist object. Since the fixed whitelist is removed in Cordova
+		 * 4.x, the correct call now is to shouldAllowRequest from the plugin manager.
+		 */
+		Boolean shouldAllowRequest = null;
+		if (isLocalTransfer) {
+			shouldAllowRequest = true;
+		}
+		if (shouldAllowRequest == null) {
+			try {
+				Method gwl = webView.getClass().getMethod("getWhitelist");
+				Whitelist whitelist = (Whitelist) gwl.invoke(webView);
+				shouldAllowRequest = whitelist.isUrlWhiteListed(source);
+			} catch (NoSuchMethodException e) {
+			} catch (IllegalAccessException e) {
+			} catch (InvocationTargetException e) {
+			}
+		}
+		if (shouldAllowRequest == null) {
+			try {
+				Method gpm = webView.getClass().getMethod("getPluginManager");
+				PluginManager pm = (PluginManager) gpm.invoke(webView);
+				Method san = pm.getClass().getMethod("shouldAllowRequest", String.class);
+				shouldAllowRequest = (Boolean) san.invoke(pm, source);
+			} catch (NoSuchMethodException e) {
+			} catch (IllegalAccessException e) {
+			} catch (InvocationTargetException e) {
+			}
+		}
 
-        if (!Boolean.TRUE.equals(shouldAllowRequest)) {
-            LOG.w(LOG_TAG, "Source URL is not in white list: '" + source + "'");
-            JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, null, 401, null);
-            callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
-            return;
-        }
+		if (!Boolean.TRUE.equals(shouldAllowRequest)) {
+			LOG.w(LOG_TAG, "Source URL is not in white list: '" + source + "'");
+			JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, null, 401, null);
+			callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
+			return;
+		}
+
+		final RequestContext context = new RequestContext(source, target, callbackContext);
+		synchronized (activeRequests) {
+			activeRequests.put(objectId, context);
+		}
+		context.business = "download";
+
+		cordova.getThreadPool().execute(new Runnable() {
+			public void run() {
+				if (context.aborted) {
+					return;
+				}
+				// Accept a path or a URI for the source.
+				Uri tmpTarget = Uri.parse(target);
+				Uri targetUri = resourceApi
+						.remapUri(tmpTarget.getScheme() != null ? tmpTarget : Uri.fromFile(new File(target)));
+				HttpURLConnection connection = null;
+				File file = null;
+				PluginResult result = null;
+				TrackingInputStream inputStream = null;
+				boolean cached = false;
+				long loaded = 0;
+				long contentLength = 0;
+
+				OutputStream outputStream = null;
+				try {
+					OpenForReadResult readResult = null;
+
+					file = resourceApi.mapUriToFile(targetUri);
+					context.targetFile = file;
+
+					// 查询文件是否存在
+					long start = 0;
+					if (file.isFile()) {
+						Log.d(LOG_TAG, "文件已存在");
+						start = file.length();
+					} else {
+						Log.d(LOG_TAG, "文件不存在");
+					}
+					headers.put("Range", "bytes=" + start + "-");
+					Log.d(LOG_TAG, "downloaded: " + start);
+
+					LOG.d(LOG_TAG, "Download file:" + sourceUri);
+
+					FileProgressResult progress = new FileProgressResult();
+					if (isLocalTransfer) {
+						readResult = resourceApi.openForRead(sourceUri);
+						if (readResult.length != -1) {
+							progress.setLengthComputable(true);
+							contentLength = readResult.length;
+							progress.setTotal(readResult.length);
+						}
+						inputStream = new SimpleTrackingInputStream(readResult.inputStream);
+					} else {
+						// connect to server
+						// Open a HTTP connection to the URL based on protocol
+						connection = resourceApi.createHttpConnection(sourceUri);
+						connection.setRequestMethod("GET");
+
+						// TODO: Make OkHttp use this CookieManager by default.
+						String cookie = getCookies(sourceUri.toString());
+
+						if (cookie != null) {
+							connection.setRequestProperty("cookie", cookie);
+						}
+
+						// This must be explicitly set for gzip progress tracking to work.
+						connection.setRequestProperty("Accept-Encoding", "gzip");
+						Log.d(LOG_TAG, "headers: " + headers);
+						// Handle the other headers
+						if (headers != null) {
+							addHeadersToRequest(connection, headers);
+						}
+
+						connection.connect();
+						if (connection.getResponseCode() == HttpURLConnection.HTTP_NOT_MODIFIED) {
+							cached = true;
+							connection.disconnect();
+							LOG.d(LOG_TAG, "Resource not modified: " + source);
+							JSONObject error = createFileTransferError(NOT_MODIFIED_ERR, source, target, connection,
+									null);
+							result = new PluginResult(PluginResult.Status.ERROR, error);
+						} else {
+							if (connection.getContentEncoding() == null
+									|| connection.getContentEncoding().equalsIgnoreCase("gzip")) {
+								// Only trust content-length header if we understand
+								// the encoding -- identity or gzip
+								contentLength = connection.getContentLength() + start;
+								Log.d(LOG_TAG, "文件总长度: " + contentLength);
+
+								if (connection.getContentLength() != -1) {
+									progress.setLengthComputable(true);
+									progress.setTotal(contentLength);
+								}
+							}
+							if (connection.getContentLength() == 0) {
+
+							} else {
+								inputStream = getInputStream(connection);
+							}
+						}
+					}
+
+					if (!cached) {
+						try {
 
 
-        final RequestContext context = new RequestContext(source, target, callbackContext);
-        synchronized (activeRequests) {
-            activeRequests.put(objectId, context);
-        }
-        context.business = "download";
 
-        cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                if (context.aborted) {
-                    return;
-                }
-                // Accept a path or a URI for the source.
-                Uri tmpTarget = Uri.parse(target);
-                Uri targetUri = resourceApi.remapUri(
-                        tmpTarget.getScheme() != null ? tmpTarget : Uri.fromFile(new File(target)));
-                HttpURLConnection connection = null;
-                File file = null;
-                PluginResult result = null;
-                TrackingInputStream inputStream = null;
-                boolean cached = false;
+							synchronized (context) {
+								if (context.aborted) {
+									return;
+								}
+								context.connection = connection;
+							}
 
-                OutputStream outputStream = null;
-                try {
-                    OpenForReadResult readResult = null;
+							// write bytes to file
+							byte[] buffer = new byte[MAX_BUFFER_SIZE];
+							int bytesRead = 0;
+							outputStream = resourceApi.openOutputStream(targetUri, true);
+							Log.d(LOG_TAG, "aaaaaaaaaa");
+							loaded = start;
+							while ((bytesRead = inputStream.read(buffer)) > 0) {
+								if (context.paused) {
+									break;
+								}
+								outputStream.write(buffer, 0, bytesRead);
+								loaded = start + inputStream.getTotalRawBytesRead();
+								// Send a progress event.
+								progress.setLoaded(loaded);
+								PluginResult progressResult = new PluginResult(PluginResult.Status.OK,
+										progress.toJSONObject());
+								progressResult.setKeepCallback(true);
+								context.sendPluginResult(progressResult);
+							}
+							Log.d(LOG_TAG, "lalala:" + loaded + "," + contentLength);
+							if (loaded == contentLength) {
+								Log.d(LOG_TAG, "文件下载完成: loaded");
+								File f = resourceApi.mapUriToFile(Uri.parse(targetOrigin));
+								boolean res = file.renameTo(f);
+								if (!res) {
+									Log.d(LOG_TAG, "文件已存在，需先删除");
+									// 先删除后重命名
+									f.delete();
+									file.renameTo(f);
+								} else {
+									Log.d(LOG_TAG, "文件重命名成功");
+								}
+							}
+						} finally {
+							synchronized (context) {
+								context.connection = null;
+							}
+							safeClose(inputStream);
+							safeClose(outputStream);
+						}
+						// create FileEntry object
+						Class webViewClass = webView.getClass();
+						PluginManager pm = null;
+						try {
+							Method gpm = webViewClass.getMethod("getPluginManager");
+							pm = (PluginManager) gpm.invoke(webView);
+						} catch (NoSuchMethodException e) {
+						} catch (IllegalAccessException e) {
+						} catch (InvocationTargetException e) {
+						}
+						if (pm == null) {
+							try {
+								Field pmf = webViewClass.getField("pluginManager");
+								pm = (PluginManager) pmf.get(webView);
+							} catch (NoSuchFieldException e) {
+							} catch (IllegalAccessException e) {
+							}
+						}
+						file = resourceApi.mapUriToFile(targetUri);
+						context.targetFile = file;
+						FileUtils filePlugin = (FileUtils) pm.getPlugin("File");
+						if (filePlugin != null) {
+							JSONObject fileEntry = filePlugin.getEntryForFile(file);
+							if (fileEntry != null) {
+								if(loaded == contentLength) {
+									result = new PluginResult(PluginResult.Status.OK, fileEntry);
+								} else {
+									//尚未下载完成
+									result = new PluginResult(PluginResult.Status.OK,
+									progress.toJSONObject());
+								}
+							} else {
+								JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection,
+										null);
+								LOG.e(LOG_TAG, "File plugin cannot represent download path");
+								result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+							}
+						} else {
+							LOG.e(LOG_TAG, "File plugin not found; cannot save downloaded file");
+							result = new PluginResult(PluginResult.Status.ERROR,
+									"File plugin not found; cannot save downloaded file");
+						}							
+					}
+				} catch (FileNotFoundException e) {
+					JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, connection, e);
+					LOG.e(LOG_TAG, error.toString(), e);
+					result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+				} catch (IOException e) {
+					JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection, e);
+					LOG.e(LOG_TAG, error.toString(), e);
+					result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+				} catch (JSONException e) {
+					LOG.e(LOG_TAG, e.getMessage(), e);
+					result = new PluginResult(PluginResult.Status.JSON_EXCEPTION);
+				} catch (Throwable e) {
+					JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection, e);
+					LOG.e(LOG_TAG, error.toString(), e);
+					result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+				} finally {
+					synchronized (activeRequests) {
+						activeRequests.remove(objectId);
+					}
 
-                    file = resourceApi.mapUriToFile(targetUri);
-                    context.targetFile = file;
-
-                    //查询文件是否存在
-                    long start = 0;
-                    if(file.isFile()) {
-                        Log.d(LOG_TAG, "文件已存在");
-                        start = file.length();
-                    } else {
-                        Log.d(LOG_TAG, "文件不存在");
-                    }
-                    headers.put("Range", "bytes=" + start + "-");
-                    Log.d(LOG_TAG, "downloaded: " + start);
-
-                    LOG.d(LOG_TAG, "Download file:" + sourceUri);
-
-                    FileProgressResult progress = new FileProgressResult();
-                    long contentLength = 0;
-                    if (isLocalTransfer) {
-                        readResult = resourceApi.openForRead(sourceUri);
-                        if (readResult.length != -1) {
-                            progress.setLengthComputable(true);
-                            contentLength = readResult.length;
-                            progress.setTotal(readResult.length);
-                        }
-                        inputStream = new SimpleTrackingInputStream(readResult.inputStream);
-                    } else {
-                        // connect to server
-                        // Open a HTTP connection to the URL based on protocol
-                        connection = resourceApi.createHttpConnection(sourceUri);
-                        connection.setRequestMethod("GET");
-
-                        // TODO: Make OkHttp use this CookieManager by default.
-                        String cookie = getCookies(sourceUri.toString());
-
-                        if(cookie != null)
-                        {
-                            connection.setRequestProperty("cookie", cookie);
-                        }
-
-                        // This must be explicitly set for gzip progress tracking to work.
-                        connection.setRequestProperty("Accept-Encoding", "gzip");
-                        Log.d(LOG_TAG, "headers: " + headers);
-                        // Handle the other headers
-                        if (headers != null) {
-                            addHeadersToRequest(connection, headers);
-                        }
-
-                        connection.connect();
-                        if (connection.getResponseCode() == HttpURLConnection.HTTP_NOT_MODIFIED) {
-                            cached = true;
-                            connection.disconnect();
-                            LOG.d(LOG_TAG, "Resource not modified: " + source);
-                            JSONObject error = createFileTransferError(NOT_MODIFIED_ERR, source, target, connection, null);
-                            result = new PluginResult(PluginResult.Status.ERROR, error);
-                        } else {
-                            if (connection.getContentEncoding() == null || connection.getContentEncoding().equalsIgnoreCase("gzip")) {
-                                // Only trust content-length header if we understand
-                                // the encoding -- identity or gzip
-                                contentLength = connection.getContentLength() + start;
-                                Log.d(LOG_TAG, "文件总长度: " + contentLength);
-
-                                if (connection.getContentLength() != -1) {
-                                    progress.setLengthComputable(true);
-                                    progress.setTotal(contentLength);
-                                }
-                            }
-                            if(connection.getContentLength() == 0) {
-
-                            } else {
-                                inputStream = getInputStream(connection);
-                            }
-                        }
-                    }
-
-                    if (!cached) {
-                        try {
-                            synchronized (context) {
-                                if (context.aborted) {
-                                    return;
-                                }
-                                context.connection = connection;
-                            }
-
-                            // write bytes to file
-                            byte[] buffer = new byte[MAX_BUFFER_SIZE];
-                            int bytesRead = 0;
-                            outputStream = resourceApi.openOutputStream(targetUri, true);
-                            Log.d(LOG_TAG, "aaaaaaaaaa");
-                            long loaded = start;
-                            while ((bytesRead = inputStream.read(buffer)) > 0) {
-                                if(context.paused) {
-                                    break;
-                                }
-                                outputStream.write(buffer, 0, bytesRead);
-                                loaded = start + inputStream.getTotalRawBytesRead();
-                                // Send a progress event.
-                                progress.setLoaded(loaded);
-                                PluginResult progressResult = new PluginResult(PluginResult.Status.OK, progress.toJSONObject());
-                                progressResult.setKeepCallback(true);
-                                context.sendPluginResult(progressResult);
-                            }
-                            Log.d(LOG_TAG, "lalala:" + loaded + "," + contentLength);
-                            if(loaded == contentLength) {
-                                Log.d(LOG_TAG, "文件下载完成: loaded");
-                                File f = resourceApi.mapUriToFile(Uri.parse(targetOrigin));
-                                boolean res = file.renameTo(f);
-                                if(!res) {
-                                    Log.d(LOG_TAG, "文件已存在，需先删除");
-                                    //先删除后重命名
-                                    f.delete();
-                                    file.renameTo(f);
-                                } else {
-                                    Log.d(LOG_TAG, "文件重命名成功");
-                                }
-                            }
-                        } finally {
-                            synchronized (context) {
-                                context.connection = null;
-                            }
-                            safeClose(inputStream);
-                            safeClose(outputStream);
-                        }
-
-                        // create FileEntry object
-                        Class webViewClass = webView.getClass();
-                        PluginManager pm = null;
-                        try {
-                            Method gpm = webViewClass.getMethod("getPluginManager");
-                            pm = (PluginManager) gpm.invoke(webView);
-                        } catch (NoSuchMethodException e) {
-                        } catch (IllegalAccessException e) {
-                        } catch (InvocationTargetException e) {
-                        }
-                        if (pm == null) {
-                            try {
-                                Field pmf = webViewClass.getField("pluginManager");
-                                pm = (PluginManager)pmf.get(webView);
-                            } catch (NoSuchFieldException e) {
-                            } catch (IllegalAccessException e) {
-                            }
-                        }
-                        file = resourceApi.mapUriToFile(targetUri);
-                        context.targetFile = file;
-                        FileUtils filePlugin = (FileUtils) pm.getPlugin("File");
-                        if (filePlugin != null) {
-                            JSONObject fileEntry = filePlugin.getEntryForFile(file);
-                            if (fileEntry != null) {
-                                result = new PluginResult(PluginResult.Status.OK, fileEntry);
-                            } else {
-                                JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection, null);
-                                LOG.e(LOG_TAG, "File plugin cannot represent download path");
-                                result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
-                            }
-                        } else {
-                            LOG.e(LOG_TAG, "File plugin not found; cannot save downloaded file");
-                            result = new PluginResult(PluginResult.Status.ERROR, "File plugin not found; cannot save downloaded file");
-                        }
-                    }
-                } catch (FileNotFoundException e) {
-                    JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, connection, e);
-                    LOG.e(LOG_TAG, error.toString(), e);
-                    result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
-                } catch (IOException e) {
-                    JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection, e);
-                    LOG.e(LOG_TAG, error.toString(), e);
-                    result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
-                } catch (JSONException e) {
-                    LOG.e(LOG_TAG, e.getMessage(), e);
-                    result = new PluginResult(PluginResult.Status.JSON_EXCEPTION);
-                } catch (Throwable e) {
-                    JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection, e);
-                    LOG.e(LOG_TAG, error.toString(), e);
-                    result = new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
-                } finally {
-                    synchronized (activeRequests) {
-                        activeRequests.remove(objectId);
-                    }
-
-                    if (result == null) {
-                        result = new PluginResult(PluginResult.Status.ERROR, createFileTransferError(CONNECTION_ERR, source, target, connection, null));
-                    }
-                    // Remove incomplete download.
-//                    if (!cached && result.getStatus() != PluginResult.Status.OK.ordinal() && file != null) {
-//                        file.delete();
-//                    }
-                    context.sendPluginResult(result);
-                }
-            }
-        });
+					if (result == null) {
+						result = new PluginResult(PluginResult.Status.ERROR,
+								createFileTransferError(CONNECTION_ERR, source, target, connection, null));
+					}
+					// Remove incomplete download.
+					// if (!cached && result.getStatus() != PluginResult.Status.OK.ordinal() && file
+					// != null) {
+					// file.delete();
+					// }
+					context.sendPluginResult(result);
+				}
+			}
+		});
 	}
 
 	private void pause(String objectId) {
-        Log.d(LOG_TAG, "abortUpload: 停止上传任务！");
-        //获取context，并设置aborted为true
-        final RequestContext context;
-        synchronized (activeRequests) {
-            context = activeRequests.get(objectId);
-        }
-        if (context != null) {
-            Log.d(LOG_TAG, "---- 成功停止！");
-            context.paused = true;
-        }
+		Log.d(LOG_TAG, "pause: 暂停任务！");
+		// 获取context，并设置aborted为true
+		final RequestContext context;
+		synchronized (activeRequests) {
+			context = activeRequests.get(objectId);
+		}
+		if (context != null) {
+			Log.d(LOG_TAG, "---- 成功停止！");
+			context.paused = true;
+		}
 	}
 
-    /**
-     * Abort an ongoing upload or download.
-     */
-    private void abort(String objectId) {
-        final RequestContext context;
-        synchronized (activeRequests) {
-            context = activeRequests.remove(objectId);
-        }
-        if (context != null) {
-            // Closing the streams can block, so execute on a background thread.
-            cordova.getThreadPool().execute(new Runnable() {
-                public void run() {
-                    synchronized (context) {
-                        File file = context.targetFile;
-                        if (file != null) {
-                            file.delete();
-                        }
-                        // Trigger the abort callback immediately to minimize latency between it and abort() being called.
-                        JSONObject error = createFileTransferError(ABORTED_ERR, context.source, context.target, null, -1, null);
-                        context.sendPluginResult(new PluginResult(PluginResult.Status.ERROR, error));
-                        context.aborted = true;
-                        if (context.connection != null) {
-                            try {
-                                context.connection.disconnect();
-                            } catch (Exception e) {
-                                LOG.e(LOG_TAG, "CB-8431 Catch workaround for fatal exception", e);
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
+	/**
+	 * Abort an ongoing upload or download.
+	 */
+	private void abort(String objectId) {
+		final RequestContext context;
+		synchronized (activeRequests) {
+			context = activeRequests.remove(objectId);
+		}
+		if (context != null) {
+			// Closing the streams can block, so execute on a background thread.
+			cordova.getThreadPool().execute(new Runnable() {
+				public void run() {
+					synchronized (context) {
+						File file = context.targetFile;
+						if (file != null) {
+							file.delete();
+						}
+						// Trigger the abort callback immediately to minimize latency between it and
+						// abort() being called.
+						JSONObject error = createFileTransferError(ABORTED_ERR, context.source, context.target, null,
+								-1, null);
+						context.sendPluginResult(new PluginResult(PluginResult.Status.ERROR, error));
+						context.aborted = true;
+						if (context.connection != null) {
+							try {
+								context.connection.disconnect();
+							} catch (Exception e) {
+								LOG.e(LOG_TAG, "CB-8431 Catch workaround for fatal exception", e);
+							}
+						}
+					}
+				}
+			});
+		}
+	}
 }
