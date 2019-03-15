@@ -717,17 +717,19 @@ public class FileTransfer extends CordovaPlugin {
 	 * Downloads a file form a given URL and saves it to the specified directory.
 	 *
 	 * @param source       URL of the server to receive the file
-	 * @param targetOrigin Full path of the file on the file system
+	 * @param target       Full path of the file on the file system
 	 */
-	private void download(final String source, final String targetOrigin, JSONArray args,
+	private void download(final String source, final String target, JSONArray args,
 			CallbackContext callbackContext) throws JSONException {
-		LOG.d(LOG_TAG, "download " + source + " to " + targetOrigin);
-		final String target = targetOrigin + ".downloading";
+		LOG.d(LOG_TAG, "download " + source + " to " + target);
 		final CordovaResourceApi resourceApi = webView.getResourceApi();
 
 		final String objectId = args.getString(3);
 		final JSONObject headers = args.optJSONObject(4);
 
+		final JSONObject params = args.optJSONObject(5) == null ? new JSONObject() : args.optJSONObject(5);
+		final int offset = params.optInt("offset", 0);
+		final int total = params.optInt("total", 0);
 		final Uri sourceUri = resourceApi.remapUri(Uri.parse(source));
 		int uriType = CordovaResourceApi.getUriType(sourceUri);
 		final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
@@ -738,6 +740,8 @@ public class FileTransfer extends CordovaPlugin {
 			callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.IO_EXCEPTION, error));
 			return;
 		}
+
+		Log.d(LOG_TAG, "文件已下载:" + offset + ",总大小:" + total);
 
 		/*
 		 * This code exists for compatibility between 3.x and 4.x versions of Cordova.
@@ -790,7 +794,7 @@ public class FileTransfer extends CordovaPlugin {
 					return;
 				}
 				// Accept a path or a URI for the source.
-				Uri tmpTarget = Uri.parse(target);
+				Uri tmpTarget = Uri.parse(target + ".[Range==bytes=0-" + offset + "=Total==" + total + "].downloading");
 				Uri targetUri = resourceApi
 						.remapUri(tmpTarget.getScheme() != null ? tmpTarget : Uri.fromFile(new File(target)));
 				HttpURLConnection connection = null;
@@ -798,8 +802,9 @@ public class FileTransfer extends CordovaPlugin {
 				PluginResult result = null;
 				TrackingInputStream inputStream = null;
 				boolean cached = false;
-				long loaded = 0;
-				long contentLength = 0;
+				long fileOffset = offset;
+				long loaded = 0; //已下载大小
+				long contentLength = 0; //文件总大小
 
 				OutputStream outputStream = null;
 				try {
@@ -808,16 +813,16 @@ public class FileTransfer extends CordovaPlugin {
 					file = resourceApi.mapUriToFile(targetUri);
 					context.targetFile = file;
 
-					// 查询文件是否存在
-					long start = 0;
-					if (file.isFile()) {
-						Log.d(LOG_TAG, "文件已存在");
-						start = file.length();
+					if(file.isFile()) {
+						fileOffset = file.length();
 					} else {
-						Log.d(LOG_TAG, "文件不存在");
+						Log.d(LOG_TAG, "run: ");
+						fileOffset = 0;
 					}
-					headers.put("Range", "bytes=" + start + "-");
-					Log.d(LOG_TAG, "downloaded: " + start);
+
+					// 查询文件是否存在
+					 headers.put("Range", "bytes=" + fileOffset + "-");
+					 Log.d(LOG_TAG, "downloaded: " + fileOffset + ",total:" + total);
 
 					LOG.d(LOG_TAG, "Download file:" + sourceUri);
 
@@ -864,7 +869,7 @@ public class FileTransfer extends CordovaPlugin {
 									|| connection.getContentEncoding().equalsIgnoreCase("gzip")) {
 								// Only trust content-length header if we understand
 								// the encoding -- identity or gzip
-								contentLength = connection.getContentLength() + start;
+								contentLength = connection.getContentLength() + fileOffset;
 								Log.d(LOG_TAG, "文件总长度: " + contentLength);
 
 								if (connection.getContentLength() != -1) {
@@ -894,13 +899,13 @@ public class FileTransfer extends CordovaPlugin {
 							int bytesRead = 0;
 							outputStream = resourceApi.openOutputStream(targetUri, true);
 							Log.d(LOG_TAG, "aaaaaaaaaa");
-							loaded = start;
+							loaded = fileOffset;
 							while ((bytesRead = inputStream.read(buffer)) > 0) {
 								if (context.paused) {
 									break;
 								}
 								outputStream.write(buffer, 0, bytesRead);
-								loaded = start + inputStream.getTotalRawBytesRead();
+								loaded = fileOffset + inputStream.getTotalRawBytesRead();
 								// Send a progress event.
 								progress.setLoaded(loaded);
 								PluginResult progressResult = new PluginResult(PluginResult.Status.OK,
@@ -909,24 +914,6 @@ public class FileTransfer extends CordovaPlugin {
 								context.sendPluginResult(progressResult);
 							}
 							Log.d(LOG_TAG, "lalala:" + loaded + "," + contentLength);
-							Log.d(LOG_TAG, "文件下载完成");
-							File f;
-							String name ;
-							if (loaded == contentLength) {
-								name = targetOrigin;
-							} else {
-								name = targetOrigin + ".[Range==bytes=0-" + loaded + "=Total==" + contentLength;
-							}
-							f = resourceApi.mapUriToFile(Uri.parse(name));
-							boolean res = file.renameTo(f);
-							if (!res) {
-								Log.d(LOG_TAG, "文件已存在，需先删除");
-								// 先删除后重命名
-								f.delete();
-								file.renameTo(f);
-							} else {
-								Log.d(LOG_TAG, "文件重命名成功:");
-							}
 						} finally {
 							synchronized (context) {
 								context.connection = null;
@@ -934,6 +921,28 @@ public class FileTransfer extends CordovaPlugin {
 							safeClose(inputStream);
 							safeClose(outputStream);
 						}
+
+						Log.d(LOG_TAG, "文件下载完成");
+						File f;
+						String name ;
+						long realLength = loaded;
+						if (loaded == contentLength) {
+							name = target;
+						} else {
+							realLength = file.length();
+							name = target + ".[Range==bytes=0-" + realLength + "=Total==" + contentLength + "].downloading";
+						}
+						f = resourceApi.mapUriToFile(Uri.parse(name));
+						boolean res = file.renameTo(f);
+						if (!res) {
+							Log.d(LOG_TAG, "文件已存在，需先删除");
+							// 先删除后重命名
+							f.delete();
+							file.renameTo(f);
+						} else {
+							Log.d(LOG_TAG, "文件重命名成功:" + name);
+						}
+
 						// create FileEntry object
 						Class webViewClass = webView.getClass();
 						PluginManager pm = null;
@@ -958,13 +967,14 @@ public class FileTransfer extends CordovaPlugin {
 						if (filePlugin != null) {
 							JSONObject fileEntry = filePlugin.getEntryForFile(file);
 							if (fileEntry != null) {
-								if(loaded == contentLength) {
-									result = new PluginResult(PluginResult.Status.OK, fileEntry);
-								} else {
-									//尚未下载完成,需对文件重命名
-									result = new PluginResult(PluginResult.Status.OK,
-									progress.toJSONObject());
+								Log.d(LOG_TAG, "Last progress: " + progress);
+								if(realLength != loaded) {
+									Log.e(LOG_TAG, "下载进度大小和实际大小不一致：" + loaded + "," + realLength );
+									progress.setLoaded(realLength);
 								}
+								progress.setLengthComputable(false);
+								result = new PluginResult(PluginResult.Status.OK,
+								progress.toJSONObject());
 							} else {
 								JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection,
 										null);
@@ -975,7 +985,7 @@ public class FileTransfer extends CordovaPlugin {
 							LOG.e(LOG_TAG, "File plugin not found; cannot save downloaded file");
 							result = new PluginResult(PluginResult.Status.ERROR,
 									"File plugin not found; cannot save downloaded file");
-						}							
+						}
 					}
 				} catch (FileNotFoundException e) {
 					JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, connection, e);

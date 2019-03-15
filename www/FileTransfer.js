@@ -94,7 +94,8 @@ var FileTransfer = function (source, target, options, trustAllHosts) {
 	this.successCallback = null;
 	this.errorCallback = null;
 	this.options = options;
-	this.trustAllHosts = trustAllHosts;
+	this.loaded =
+		this.trustAllHosts = trustAllHosts;
 };
 
 FileTransfer.prototype.onProgress = function (prog) {
@@ -235,29 +236,33 @@ FileTransfer.prototype.download = function () {
 	if (cordova.platformId === "windowsphone" && headers) {
 		headers = convertHeadersToArray(headers);
 	}
+	this.options.params = this.options.params || {};
 	this.business = 'download';
-	console.log("开始下载.........")
+	console.log("开始下载........." + JSON.stringify(this.options))
 	var win = function (result) {
+		self.options.params.offset = result.loaded;
+		self.options.params.total = result.total;
 		// console.log("进度更新：" + JSON.stringify(result) + "," + !!self.onprogress + !!self.successCallback)
-		if (typeof result.lengthComputable != "undefined") {
+		if (result.lengthComputable) {
+			// if (typeof result.lengthComputable != "undefined") {
 			if (self.onprogress) {
 				return self.onprogress(newProgressEvent(result));
 			}
 		} else if (self.successCallback) {
-			var entry = null;
-			if (result.isDirectory) {
-				entry = new (require('cordova-plugin-file.DirectoryEntry'))();
-			}
-			else if (result.isFile) {
-				entry = new (require('cordova-plugin-file.FileEntry'))();
-			}
-			entry.isDirectory = result.isDirectory;
-			entry.isFile = result.isFile;
-			entry.name = result.name;
-			entry.fullPath = result.fullPath;
-			entry.filesystem = new FileSystem(result.filesystemName || (result.filesystem == window.PERSISTENT ? 'persistent' : 'temporary'));
-			entry.nativeURL = result.nativeURL;
-			self.successCallback(entry);
+			// var entry = null;
+			// if (result.isDirectory) {
+			//     entry = new (require('cordova-plugin-file.DirectoryEntry'))();
+			// }
+			// else if (result.isFile) {
+			//     entry = new (require('cordova-plugin-file.FileEntry'))();
+			// }
+			// entry.isDirectory = result.isDirectory;
+			// entry.isFile = result.isFile;
+			// entry.name = result.name;
+			// entry.fullPath = result.fullPath;
+			// entry.filesystem = new FileSystem(result.filesystemName || (result.filesystem == window.PERSISTENT ? 'persistent' : 'temporary'));
+			// entry.nativeURL = result.nativeURL;
+			self.successCallback(result);
 		}
 	};
 
@@ -265,8 +270,7 @@ FileTransfer.prototype.download = function () {
 		var error = new FileTransferError(e.code, e.source, e.target, e.http_status, e.body, e.exception);
 		self.errorCallback(error);
 	};
-
-	exec(win, fail, 'FileTransfer', 'download', [this.source, this.target, this.trustAllHosts, this._id, headers, options.start || 0]);
+	exec(win, fail, 'FileTransfer', 'download', [this.source, this.target, this.trustAllHosts, this._id, headers, this.options.params]);
 };
 
 /**
@@ -289,5 +293,4 @@ FileTransfer.prototype.resume = function () {
 	}
 };
 
-module.exports = FileTransfer;
-
+module.exports = FileTransfer;	
