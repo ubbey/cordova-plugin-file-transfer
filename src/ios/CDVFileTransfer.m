@@ -141,7 +141,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     // however, params is a JavaScript object and during marshalling is put into the options dict,
     // thus debug and chunkedMode are the 6th and 7th arguments
     NSString* target = [command argumentAtIndex:0];
-    NSString* server = [command argumentAtIndex:1];
+    NSString* server = [command argumentAtIndex:1]; 
     NSString* fileKey = [command argumentAtIndex:2 withDefault:@"file"];
     NSString* fileName = [command argumentAtIndex:3 withDefault:@"image.jpg"];
     NSString* mimeType = [command argumentAtIndex:4 withDefault:@"image/jpeg"];
@@ -418,6 +418,19 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     }
 }
 
+- (void)pause:(CDVInvokedUrlCommand*)command
+{
+    NSString* objectId = [command argumentAtIndex:0];
+    
+    @synchronized (activeTransfers) {
+        CDVFileTransferDelegate* delegate = activeTransfers[objectId];
+        if (delegate != nil) {
+            [delegate cancelTransfer:delegate.connection];
+            CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[self createFileTransferError:CONNECTION_ABORTED AndSource:delegate.source AndTarget:delegate.target]];
+            [self.commandDelegate sendPluginResult:result callbackId:delegate.callbackId];
+        }
+    }}
+
 - (void)download:(CDVInvokedUrlCommand*)command
 {
     DLog(@"File Transfer downloading file...");
@@ -425,7 +438,12 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSString* target = [command argumentAtIndex:1];
     BOOL trustAllHosts = [[command argumentAtIndex:2 withDefault:[NSNumber numberWithBool:NO]] boolValue]; // allow self-signed certs
     NSString* objectId = [command argumentAtIndex:3];
-    NSDictionary* headers = [command argumentAtIndex:4 withDefault:nil];
+    NSMutableDictionary* headers = [command argumentAtIndex:4 withDefault:nil];
+    NSDictionary* params = [command argumentAtIndex:5 withDefault:nil];
+
+	NSInteger offset = params[@"offset"] || 0;
+	NSInteger total = params[@"total"] || 0;
+	NSLog(@"File offset: %ld, file total: %ld", offset, total);
 
     CDVPluginResult* result = nil;
     CDVFileTransferError errorCode = 0;
@@ -471,6 +489,22 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         return;
     }
 
+    NSString* name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].downloading"];
+
+    NSURL* tmpTargetURL = [[self.commandDelegate getCommandInstance:@"File"] fileSystemURLforLocalPath:name].url;
+
+	NSFileManager *fileManager = [NSFileManager defaultManager];
+	if ([fileManager fileExistsAtPath:name]){ 
+		offset = [[fileManager attributesOfItemAtPath:name error:nil] fileSize];
+		NSLog(@"File offset is set to %ld", offset);
+	} else {
+		offset = 0;
+		NSLog(@"File offset is set to %ld", offset);
+	}
+    [headers setValue:[NSString stringWithFormat:@"%@%@ld%@", @"bytes=", offset, @"-"] forKey:@"Range"];
+
+    
+
     NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:sourceURL];
     [self applyRequestHeaders:headers toRequest:req];
 
@@ -480,8 +514,10 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     delegate.callbackId = command.callbackId;
     delegate.objectId = objectId;
     delegate.source = source;
-    delegate.target = [targetURL absoluteString];
-    delegate.targetURL = targetURL;
+	delegate.paused = false;
+	delegate.business = @"download";
+    delegate.target = [tmpTargetURL absoluteString];
+    delegate.targetURL = tmpTargetURL; //下载到临时文件
     delegate.trustAllHosts = trustAllHosts;
     delegate.filePlugin = [self.commandDelegate getCommandInstance:@"File"];
     delegate.backgroundTaskID = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
