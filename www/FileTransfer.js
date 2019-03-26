@@ -294,5 +294,3 @@ FileTransfer.prototype.resume = function () {
 };
 
 module.exports = FileTransfer;
-	
-	});

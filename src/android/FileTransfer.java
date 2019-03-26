@@ -264,6 +264,9 @@ public class FileTransfer extends CordovaPlugin {
 	}
 
 	/**
+	 * 
+	 * 
+	 * 
 	 * Uploads the specified file to the server URL provided using an HTTP multipart
 	 * request.
 	 * 

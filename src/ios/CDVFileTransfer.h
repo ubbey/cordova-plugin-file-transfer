@@ -39,11 +39,15 @@ typedef int CDVFileTransferDirection;
 // Magic value within the options dict used to set a cookie.
 extern NSString* const kOptionsKeyCookie;
 
+@class CDVFileTransferDelegate;
+
 @interface CDVFileTransfer : CDVPlugin {}
 
 - (void)upload:(CDVInvokedUrlCommand*)command;
 - (void)download:(CDVInvokedUrlCommand*)command;
+
 - (NSString*)escapePathComponentForUrlString:(NSString*)urlString;
+- (CFIndex)WriteDataToStream:(NSData*)data myStream:(CFWriteStreamRef)stream delegate:(CDVFileTransferDelegate*)delegate;
 
 // Visible for testing.
 - (NSURLRequest*)requestForUploadCommand:(CDVInvokedUrlCommand*)command fileData:(NSData*)fileData;
@@ -64,6 +68,9 @@ extern NSString* const kOptionsKeyCookie;
 
 - (void)updateBytesExpected:(long long)newBytesExpected;
 - (void)cancelTransfer:(NSURLConnection*)connection;
+- (void)cancelTransferOnPause:(NSURLConnection*)connection;
+- (void)setProgress:(BOOL)lengthComputable;
+
 
 @property (strong) NSMutableData* responseData; // atomic
 @property (nonatomic, strong) NSDictionary* responseHeaders;
@@ -75,6 +82,8 @@ extern NSString* const kOptionsKeyCookie;
 @property (nonatomic, copy) NSString* objectId;
 @property (nonatomic, copy) NSString* source;
 @property (nonatomic, copy) NSString* target;
+@property (nonatomic, copy) NSString* targetName;
+
 @property (nonatomic, copy) NSURL* targetURL;
 @property (nonatomic, copy) NSString* mimeType;
 @property (assign) int responseCode; // atomic
@@ -86,6 +95,6 @@ extern NSString* const kOptionsKeyCookie;
 @property (nonatomic, strong) CDVFile *filePlugin;
 @property (nonatomic, assign) BOOL chunkedMode;
 @property (nonatomic, copy) NSString* business;
-@property (nonatomic, assign) BOOL* paused;
+@property (nonatomic, assign) BOOL paused;
 
 @end
