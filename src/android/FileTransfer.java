@@ -142,7 +142,7 @@ public class FileTransfer extends CordovaPlugin {
 	 * Provides simple total-bytes-read tracking for an existing InputStream
 	 */
 	private static class SimpleTrackingInputStream extends TrackingInputStream {
-		private long bytesRead = 0;
+		private int bytesRead = 0;
 
 		public SimpleTrackingInputStream(InputStream stream) {
 			super(stream);
@@ -416,7 +416,7 @@ public class FileTransfer extends CordovaPlugin {
 					// Get a input stream of the file on the phone
 					OpenForReadResult readResult = resourceApi.openForRead(sourceUri);
 					if (readResult.length >= 0) {
-						fixedLength = (long) readResult.length;
+						fixedLength = readResult.length;
 						contentLength = fixedLength;
 						Log.d(LOG_TAG, "读到文件长度：" + contentLength);
 						// if (multipartFormUpload)
@@ -491,12 +491,12 @@ public class FileTransfer extends CordovaPlugin {
 						// 由于offset，需要跳过前面的字段
 						readResult.inputStream.skip(offset);
 						// create a buffer of maximum size
-						long bytesAvailable = readResult.inputStream.available();
-						long bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
+						int bytesAvailable = readResult.inputStream.available();
+						int bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
 						byte[] buffer = new byte[bufferSize];
 
 						// read file and write it into form...
-						long bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
+						int bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
 
 						long prevBytesRead = 0;
 						while (bytesRead > 0) {
@@ -872,15 +872,20 @@ public class FileTransfer extends CordovaPlugin {
 									|| connection.getContentEncoding().equalsIgnoreCase("gzip")) {
 								// Only trust content-length header if we understand
 								// the encoding -- identity or gzip
-								contentLength = connection.getContentLength() + fileOffset;
+//								contentLength = connection.getContentLength() + fileOffset;
+								String sLength = connection.getHeaderField("Content-Length");
+								contentLength = Long.parseLong(sLength) + fileOffset;
 								Log.d(LOG_TAG, "文件总长度: " + contentLength);
 
 								if (connection.getContentLength() != -1) {
 									progress.setLengthComputable(true);
 									progress.setTotal(contentLength);
+								} else {
+									progress.setLengthComputable(true);
+									progress.setTotal(-1);
 								}
 							}
-							if (connection.getContentLength() == 0) {
+							if (contentLength <= fileOffset) {
 
 							} else {
 								inputStream = getInputStream(connection);
@@ -899,7 +904,7 @@ public class FileTransfer extends CordovaPlugin {
 
 							// write bytes to file
 							byte[] buffer = new byte[MAX_BUFFER_SIZE];
-							long bytesRead = 0;
+							int bytesRead = 0;
 							outputStream = resourceApi.openOutputStream(targetUri, true);
 							Log.d(LOG_TAG, "aaaaaaaaaa");
 							loaded = fileOffset;
