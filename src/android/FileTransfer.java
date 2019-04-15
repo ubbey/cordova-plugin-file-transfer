@@ -343,9 +343,9 @@ public class FileTransfer extends CordovaPlugin {
 						.remapUri(tmpSrc.getScheme() != null ? tmpSrc : Uri.fromFile(new File(source)));
 
 				HttpURLConnection conn = null;
-				int totalBytes = 0;
-				int fixedLength = -1;
-				int contentLength = -1;
+				long totalBytes = 0;
+				long fixedLength = -1;
+				long contentLength = -1;
 				try {
 					// Create return object
 					FileUploadResult result = new FileUploadResult();
@@ -416,7 +416,7 @@ public class FileTransfer extends CordovaPlugin {
 					// Get a input stream of the file on the phone
 					OpenForReadResult readResult = resourceApi.openForRead(sourceUri);
 					if (readResult.length >= 0) {
-						fixedLength = (int) readResult.length;
+						fixedLength = (long) readResult.length;
 						contentLength = fixedLength;
 						Log.d(LOG_TAG, "读到文件长度：" + contentLength);
 						// if (multipartFormUpload)
@@ -472,7 +472,7 @@ public class FileTransfer extends CordovaPlugin {
 					conn.connect();
 
 					OutputStream sendStream = null;
-					int accumulateOffset = offset;
+					long accumulateOffset = offset;
 					try {
 						sendStream = conn.getOutputStream();
 						synchronized (context) {
@@ -491,12 +491,12 @@ public class FileTransfer extends CordovaPlugin {
 						// 由于offset，需要跳过前面的字段
 						readResult.inputStream.skip(offset);
 						// create a buffer of maximum size
-						int bytesAvailable = readResult.inputStream.available();
-						int bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
+						long bytesAvailable = readResult.inputStream.available();
+						long bufferSize = Math.min(bytesAvailable, MAX_BUFFER_SIZE);
 						byte[] buffer = new byte[bufferSize];
 
 						// read file and write it into form...
-						int bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
+						long bytesRead = readResult.inputStream.read(buffer, 0, bufferSize);
 
 						long prevBytesRead = 0;
 						while (bytesRead > 0) {
@@ -899,7 +899,7 @@ public class FileTransfer extends CordovaPlugin {
 
 							// write bytes to file
 							byte[] buffer = new byte[MAX_BUFFER_SIZE];
-							int bytesRead = 0;
+							long bytesRead = 0;
 							outputStream = resourceApi.openOutputStream(targetUri, true);
 							Log.d(LOG_TAG, "aaaaaaaaaa");
 							loaded = fileOffset;
