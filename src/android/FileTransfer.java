@@ -298,7 +298,7 @@ public class FileTransfer extends CordovaPlugin {
 				: args.optJSONObject(8);
 		final String objectId = args.getString(9);
 		final String httpMethod = getArgument(args, 10, "POST");
-		final int offset = params.optInt("offset", 0);
+		final long offset = params.optLong("offset", 0);
 		final CordovaResourceApi resourceApi = webView.getResourceApi();
 		Log.d(LOG_TAG, "上传偏移量: " + offset);
 		LOG.d(LOG_TAG, "fileKey: " + fileKey);
@@ -731,8 +731,8 @@ public class FileTransfer extends CordovaPlugin {
 		final JSONObject headers = args.optJSONObject(4);
 
 		final JSONObject params = args.optJSONObject(5) == null ? new JSONObject() : args.optJSONObject(5);
-		final int offset = params.optInt("offset", 0);
-		final int total = params.optInt("total", 0);
+		final long offset = params.optLong("offset", 0);
+		final long total = params.optLong("total", 0);
 		final Uri sourceUri = resourceApi.remapUri(Uri.parse(source));
 		int uriType = CordovaResourceApi.getUriType(sourceUri);
 		final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
