@@ -719,11 +719,11 @@ public class FileTransfer extends CordovaPlugin {
 	/**
 	 * Downloads a file form a given URL and saves it to the specified directory.
 	 *
-	 * @param source       URL of the server to receive the file
-	 * @param target       Full path of the file on the file system
+	 * @param source URL of the server to receive the file
+	 * @param target Full path of the file on the file system
 	 */
-	private void download(final String source, final String target, JSONArray args,
-			CallbackContext callbackContext) throws JSONException {
+	private void download(final String source, final String target, JSONArray args, CallbackContext callbackContext)
+			throws JSONException {
 		LOG.d(LOG_TAG, "download " + source + " to " + target);
 		final CordovaResourceApi resourceApi = webView.getResourceApi();
 
@@ -806,8 +806,8 @@ public class FileTransfer extends CordovaPlugin {
 				TrackingInputStream inputStream = null;
 				boolean cached = false;
 				long fileOffset = offset;
-				long loaded = 0; //已下载大小
-				long contentLength = 0; //文件总大小
+				long loaded = 0; // 已下载大小
+				long contentLength = 0; // 文件总大小
 
 				OutputStream outputStream = null;
 				try {
@@ -816,7 +816,7 @@ public class FileTransfer extends CordovaPlugin {
 					file = resourceApi.mapUriToFile(targetUri);
 					context.targetFile = file;
 
-					if(file.isFile()) {
+					if (file.isFile()) {
 						fileOffset = file.length();
 					} else {
 						Log.d(LOG_TAG, "run: ");
@@ -824,8 +824,8 @@ public class FileTransfer extends CordovaPlugin {
 					}
 
 					// 查询文件是否存在
-					 headers.put("Range", "bytes=" + fileOffset + "-");
-					 Log.d(LOG_TAG, "downloaded: " + fileOffset + ",total:" + total);
+					headers.put("Range", "bytes=" + fileOffset + "-");
+					Log.d(LOG_TAG, "downloaded: " + fileOffset + ",total:" + total);
 
 					LOG.d(LOG_TAG, "Download file:" + sourceUri);
 
@@ -872,13 +872,12 @@ public class FileTransfer extends CordovaPlugin {
 									|| connection.getContentEncoding().equalsIgnoreCase("gzip")) {
 								// Only trust content-length header if we understand
 								// the encoding -- identity or gzip
-								contentLength = connection.getContentLength() + fileOffset;
+								String sLength = connection.getHeaderField("Content-Length");
+								contentLength = Long.parseLong(sLength) + fileOffset;
 								Log.d(LOG_TAG, "文件总长度: " + contentLength);
 
-								if (connection.getContentLength() != -1) {
-									progress.setLengthComputable(true);
-									progress.setTotal(contentLength);
-								}
+								progress.setLengthComputable(true);
+								progress.setTotal(contentLength);
 							}
 							if (connection.getContentLength() == 0) {
 
@@ -927,13 +926,14 @@ public class FileTransfer extends CordovaPlugin {
 
 						Log.d(LOG_TAG, "文件下载完成");
 						File f;
-						String name ;
+						String name;
 						long realLength = loaded;
 						if (loaded == contentLength) {
 							name = target;
 						} else {
 							realLength = file.length();
-							name = target + ".[Range==bytes=0-" + realLength + "=Total==" + contentLength + "].downloading";
+							name = target + ".[Range==bytes=0-" + realLength + "=Total==" + contentLength
+									+ "].downloading";
 						}
 						f = resourceApi.mapUriToFile(Uri.parse(name));
 						boolean res = file.renameTo(f);
@@ -971,13 +971,12 @@ public class FileTransfer extends CordovaPlugin {
 							JSONObject fileEntry = filePlugin.getEntryForFile(file);
 							if (fileEntry != null) {
 								Log.d(LOG_TAG, "Last progress: " + progress);
-								if(realLength != loaded) {
-									Log.e(LOG_TAG, "下载进度大小和实际大小不一致：" + loaded + "," + realLength );
+								if (realLength != loaded) {
+									Log.e(LOG_TAG, "下载进度大小和实际大小不一致：" + loaded + "," + realLength);
 									progress.setLoaded(realLength);
 								}
 								progress.setLengthComputable(false);
-								result = new PluginResult(PluginResult.Status.OK,
-								progress.toJSONObject());
+								result = new PluginResult(PluginResult.Status.OK, progress.toJSONObject());
 							} else {
 								JSONObject error = createFileTransferError(CONNECTION_ERR, source, target, connection,
 										null);
