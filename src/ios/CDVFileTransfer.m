@@ -506,6 +506,12 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
 	NSInteger offset = (long)params[@"offset"];
 	NSInteger total = (long)params[@"total"];
+    if(offset < 0) {
+        offset = 0;
+    }
+    if(total < 0) {
+        total = 0;
+    }
 	NSLog(@"File offset: %ld, file total: %ld", offset, total);
 
     CDVPluginResult* result = nil;
@@ -527,6 +533,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 		offset = 0;
 		NSLog(@"File offset is set to %ld", offset);
 	}
+    name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].downloading"];
     [headers setValue:[NSString stringWithFormat:@"%@%ld%@", @"bytes=", (long)offset, @"-"] forKey:@"Range"];
 
     //targetURL规范化......
@@ -735,9 +742,33 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         if (self.targetFileHandle) {
             [self.targetFileHandle closeFile];
             self.targetFileHandle = nil;
-            DLog(@"File Transfer Download success");
 
-            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:[self.filePlugin makeEntryForURL:self.targetURL]];
+            NSFileManager *fileManager = [NSFileManager defaultManager];
+            //检查文件是否存在
+            NSString* originName = [[self targetFilePath] stringByReplacingOccurrencesOfString:@"file://" withString:@""];
+            NSString* newName = [self.targetName stringByReplacingOccurrencesOfString:@"file://" withString:@""];;
+            DLog(@"File Transfer Download success------: %@, %@", originName, newName);
+
+            //如果文件存在，则先删除
+            NSError *error = nil;
+            [fileManager moveItemAtPath:originName toPath:newName error:&error];
+            if(error == nil) {
+                NSLog(@"!!!文件重命名成功...%@, %@", originName, newName);
+            } else {
+                NSLog(@"!!!文件已存在，先删除后重命名:%@, %@", originName, newName);
+                NSLog(@"%@", error);
+                [fileManager removeItemAtPath:newName error:nil];
+                [fileManager moveItemAtPath:originName toPath:newName error:&error];
+            }
+            
+            NSMutableDictionary* downloadProgress = [NSMutableDictionary dictionaryWithCapacity:3];
+            [downloadProgress setObject:[NSNumber numberWithBool:false] forKey:@"lengthComputable"];
+            [downloadProgress setObject:[NSNumber numberWithLongLong:self.bytesTransfered] forKey:@"loaded"];
+            [downloadProgress setObject:[NSNumber numberWithLongLong:self.bytesExpected] forKey:@"total"];
+            NSLog(@"Download finished progress:%ld,%ld", (long)self.bytesTransfered, (long)self.bytesExpected);
+            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:downloadProgress];
+            
+//            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:[self.filePlugin makeEntryForURL:self.targetURL]];
         } else {
             downloadResponse = [[NSString alloc] initWithData:self.responseData encoding:NSUTF8StringEncoding];
             if (downloadResponse == nil) {
@@ -796,20 +827,21 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
             }
         }
         //检查文件是否存在
-        NSString* name = self.target;
+        NSString* name = self.targetFilePath;
         if(loaded < self.bytesExpected) {
             //文件尚未下载完毕
             name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", self.targetName, @".[Range==bytes=0-", loaded, @"=Total==", self.bytesExpected, @"].downloading"];
         }
+        NSString* originName = [self targetFilePath];
         //如果文件存在，则先删除
         NSError *error = nil;
-        BOOL flag = [fileManager moveItemAtPath:self.target toPath:name error:&error];
+        BOOL flag = [fileManager moveItemAtPath:originName toPath:name error:&error];
         if(flag) {
-            NSLog(@"文件重命名成功...");
+            NSLog(@"文件重命名成功...%@", name);
         } else {
-            NSLog(@"文件已存在，先删除后重命名");
+            NSLog(@"文件已存在，先删除后重命名:%@", name);
             [fileManager removeItemAtPath:name error:nil];
-            [fileManager moveItemAtPath:self.target toPath:name error:&error];
+            [fileManager moveItemAtPath:originName toPath:name error:&error];
         }
     }
 }
