@@ -176,7 +176,7 @@ FileTransfer.prototype.upload = function () {
 
 	var win = function (result) {
 		// console.log("进度更新：" + JSON.stringify(result) + "," + !!self.onprogress)
-		if (typeof result.lengthComputable != "undefined") {
+		if (result.lengthComputable) {
 			if (self.onprogress) {
 				self.onprogress(newProgressEvent(result));
 			}
