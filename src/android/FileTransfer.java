@@ -797,7 +797,7 @@ public class FileTransfer extends CordovaPlugin {
 					return;
 				}
 				// Accept a path or a URI for the source.
-				Uri tmpTarget = Uri.parse(target + ".[Range==bytes=0-" + offset + "=Total==" + total + "].downloading");
+				Uri tmpTarget = Uri.parse(target + ".[Range==bytes=0-" + offset + "=Total==" + total + "].download");
 				Uri targetUri = resourceApi
 						.remapUri(tmpTarget.getScheme() != null ? tmpTarget : Uri.fromFile(new File(target)));
 				HttpURLConnection connection = null;
@@ -934,7 +934,7 @@ public class FileTransfer extends CordovaPlugin {
 						} else {
 							realLength = file.length();
 							name = target + ".[Range==bytes=0-" + realLength + "=Total==" + contentLength
-									+ "].downloading";
+									+ "].download";
 						}
 						f = resourceApi.mapUriToFile(Uri.parse(name));
 						boolean res = file.renameTo(f);
