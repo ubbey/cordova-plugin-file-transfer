@@ -504,9 +504,9 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSMutableDictionary* headers = [command argumentAtIndex:4 withDefault:nil];
     NSDictionary* params = [command argumentAtIndex:5 withDefault:nil];
 
-	NSInteger offset = (long)params[@"offset"];
-	NSInteger total = (long)params[@"total"];
-	NSLog(@"File offset: %ld, file total: %ld", offset, total);
+    long long offset = [[params valueForKey:@"offset"] longLongValue];
+    long long total = [[params valueForKey:@"total"] longLongValue];
+	NSLog(@"File offset: %lld, file total: %lld", offset, total);
 
     CDVPluginResult* result = nil;
     CDVFileTransferError errorCode = 0;
@@ -522,12 +522,12 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 	NSFileManager *fileManager = [NSFileManager defaultManager];
 	if ([fileManager fileExistsAtPath:name]){ 
 		offset = [[fileManager attributesOfItemAtPath:name error:nil] fileSize];
-		NSLog(@"File offset is set to %ld", offset);
+		NSLog(@"File offset is set to %lld", offset);
 	} else {
 		offset = 0;
-		NSLog(@"File offset is set to %ld", offset);
+		NSLog(@"File offset is set to %lld", offset);
 	}
-    [headers setValue:[NSString stringWithFormat:@"%@%ld%@", @"bytes=", (long)offset, @"-"] forKey:@"Range"];
+    [headers setValue:[NSString stringWithFormat:@"%@%lld%@", @"bytes=", offset, @"-"] forKey:@"Range"];
 
     //targetURL规范化......
     if ([name hasPrefix:@"/"]) {
@@ -577,6 +577,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     delegate.source = source;
 	delegate.paused = false;
 	delegate.business = @"download";
+    delegate.offset = offset;
+    delegate.total = total;
     delegate.target = [targetURL absoluteString];
     delegate.targetName = target;
     delegate.targetURL = targetURL; //下载到临时文件
@@ -736,8 +738,25 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
             [self.targetFileHandle closeFile];
             self.targetFileHandle = nil;
             DLog(@"File Transfer Download success");
+            
+            NSFileManager *fileManager = [NSFileManager defaultManager];
 
-            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:[self.filePlugin makeEntryForURL:self.targetURL]];
+            //检查文件是否存在
+            NSString* name = [self.targetName stringByReplacingOccurrencesOfString:@"file://"
+                                                                              withString:@""];
+            NSString* currentName = [[self targetFilePath] stringByReplacingOccurrencesOfString:@"file://"
+                                                                                     withString:@""];
+            //如果文件存在，则先删除
+            NSError *error = nil;
+            BOOL flag = [fileManager moveItemAtPath:currentName toPath:name error:&error];
+            if(flag) {
+                NSLog(@"文件重命名成功...%@,%@", [self targetFilePath], name);
+            } else {
+                NSLog(@"文件已存在，先删除后重命名, %@, %@", self.target, name);
+                [fileManager removeItemAtPath:name error:nil];
+                [fileManager moveItemAtPath:currentName toPath:name error:&error];
+            }
+            [self setProgress:false];
         } else {
             downloadResponse = [[NSString alloc] initWithData:self.responseData encoding:NSUTF8StringEncoding];
             if (downloadResponse == nil) {
@@ -747,10 +766,10 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
             CDVFileTransferError errorCode = self.responseCode == 404 ? FILE_NOT_FOUND_ERR
                 : (self.responseCode == 304 ? NOT_MODIFIED : CONNECTION_ERR);
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[command createFileTransferError:errorCode AndSource:source AndTarget:target AndHttpStatus:self.responseCode AndBody:downloadResponse]];
+            [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
         }
     }
 
-    [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
 
     // remove connection for activeTransfers
     @synchronized (command.activeTransfers) {
@@ -786,31 +805,35 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     if (self.direction == CDV_TRANSFER_DOWNLOAD) {
         //获取文件总大小
         NSFileManager *fileManager = [NSFileManager defaultManager];
-        NSInteger loaded = 0;
-        if ([fileManager fileExistsAtPath:self.target]){
-            loaded = [[fileManager attributesOfItemAtPath:self.target error:nil] fileSize];
-            NSLog(@"文件暂停时已下载%ld,记录大小%ld, 总大小%ld", (long)loaded, (long)self.bytesTransfered, (long)self.bytesExpected);
-            if(loaded != self.bytesTransfered) {
-                self.bytesTransfered = loaded;
-                NSLog(@"警告：文件进度大小已被重置.......");
-            }
-        }
+        long long loaded = self.bytesTransfered + self.offset;
+//        if ([fileManager fileExistsAtPath:self.target]){
+//            loaded = [[fileManager attributesOfItemAtPath:self.target error:nil] fileSize];
+//            NSLog(@"文件暂停时已下载%ld,记录大小%ld, 总大小%ld", (long)loaded, (long)self.bytesTransfered, (long)self.bytesExpected);
+//            if(loaded != self.bytesTransfered) {
+////                self.bytesTransfered = loaded;
+//                NSLog(@"警告：文件进度大小已被重置.......");
+//            }
+//        }
         //检查文件是否存在
-        NSString* name = self.target;
+        NSString* name = [self targetName];
         if(loaded < self.bytesExpected) {
             //文件尚未下载完毕
-            name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", self.targetName, @".[Range==bytes=0-", loaded, @"=Total==", self.bytesExpected, @"].downloading"];
+            name = [NSString stringWithFormat:@"%@%@%lld%@%lld%@", self.targetName, @".[Range==bytes=0-", loaded, @"=Total==", self.bytesExpected, @"].downloading"];
         }
+        name = [name stringByReplacingOccurrencesOfString:@"file://" withString:@""];
+        NSLog(@"重命名到文件：%@", name);
+        NSString* currentName = [[self targetFilePath] stringByReplacingOccurrencesOfString:@"file://" withString:@""];
         //如果文件存在，则先删除
         NSError *error = nil;
-        BOOL flag = [fileManager moveItemAtPath:self.target toPath:name error:&error];
+        BOOL flag = [fileManager moveItemAtPath:currentName toPath:name error:&error];
         if(flag) {
             NSLog(@"文件重命名成功...");
         } else {
             NSLog(@"文件已存在，先删除后重命名");
             [fileManager removeItemAtPath:name error:nil];
-            [fileManager moveItemAtPath:self.target toPath:name error:&error];
+            [fileManager moveItemAtPath:currentName toPath:name error:&error];
         }
+        [self setProgress:false];
     }
 }
 
@@ -866,7 +889,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         NSHTTPURLResponse* httpResponse = (NSHTTPURLResponse*)response;
 
         self.responseCode = (int)[httpResponse statusCode];
-        self.bytesExpected = [response expectedContentLength];
+        self.bytesExpected = [response expectedContentLength] + self.offset;
         self.responseHeaders = [httpResponse allHeaderFields];
         if ((self.direction == CDV_TRANSFER_DOWNLOAD) && (self.responseCode == 200) && (self.bytesExpected == NSURLResponseUnknownLength)) {
             // Kick off HEAD request to server to get real length
@@ -876,7 +899,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     } else if ([response.URL isFileURL]) {
         NSDictionary* attr = [[NSFileManager defaultManager] attributesOfItemAtPath:[response.URL path] error:nil];
         self.responseCode = 200;
-        self.bytesExpected = [attr[NSFileSize] longLongValue];
+        self.bytesExpected = [attr[NSFileSize] longLongValue] + self.offset;
     } else {
         self.responseCode = 200;
         self.bytesExpected = NSURLResponseUnknownLength;
@@ -940,7 +963,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 - (void)updateBytesExpected:(long long)newBytesExpected
 {
     DLog(@"Updating bytesExpected to %lld", newBytesExpected);
-    self.bytesExpected = newBytesExpected;
+    self.bytesExpected = newBytesExpected + self.offset;
     [self updateProgress];
 }
 
@@ -948,7 +971,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 {
     NSMutableDictionary* downloadProgress = [NSMutableDictionary dictionaryWithCapacity:3];
     [downloadProgress setObject:[NSNumber numberWithBool:lengthComputable] forKey:@"lengthComputable"];
-    [downloadProgress setObject:[NSNumber numberWithLongLong:self.bytesTransfered] forKey:@"loaded"];
+    [downloadProgress setObject:[NSNumber numberWithLongLong:(self.bytesTransfered + self.offset)] forKey:@"loaded"];
     [downloadProgress setObject:[NSNumber numberWithLongLong:self.bytesExpected] forKey:@"total"];
     NSLog(@"Update progress:%ld,%ld", (long)self.bytesTransfered, (long)self.bytesExpected);
     CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:downloadProgress];
