@@ -518,15 +518,15 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
  //   name = [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLHostAllowedCharacterSet]];
 //    NSURL* tmpTargetURL = [[self.commandDelegate getCommandInstance:@"File"] fileSystemURLforLocalPath:name].url;
 
-    //查找文件，矫正offset的位置。。。。
-	NSFileManager *fileManager = [NSFileManager defaultManager];
-	if ([fileManager fileExistsAtPath:name]){ 
-		offset = [[fileManager attributesOfItemAtPath:name error:nil] fileSize];
-		NSLog(@"File offset is set to %lld", offset);
-	} else {
-		offset = 0;
-		NSLog(@"File offset is set to %lld", offset);
-	}
+//    //查找文件，矫正offset的位置。。。。
+//    NSFileManager *fileManager = [NSFileManager defaultManager];
+//    if ([fileManager fileExistsAtPath:name]){
+//        offset = [[fileManager attributesOfItemAtPath:name error:nil] fileSize];
+//        NSLog(@"File offset is set to %lld", offset);
+//    } else {
+//        offset = 0;
+//        NSLog(@"File offset is set to %lld", offset);
+//    }
     [headers setValue:[NSString stringWithFormat:@"%@%lld%@", @"bytes=", offset, @"-"] forKey:@"Range"];
 
     //targetURL规范化......
