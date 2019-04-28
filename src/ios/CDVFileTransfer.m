@@ -519,7 +519,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
     NSURL* targetURL;
     NSURL* sourceURL = [NSURL URLWithString:source];
-    NSString* name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].downloading"];
+    NSString* name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].download"];
 //    NSString* name = target;
  //   name = [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLHostAllowedCharacterSet]];
 //    NSURL* tmpTargetURL = [[self.commandDelegate getCommandInstance:@"File"] fileSystemURLforLocalPath:name].url;
@@ -533,7 +533,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 		offset = 0;
 		NSLog(@"File offset is set to %ld", offset);
 	}
-    name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].downloading"];
+    name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].download"];
     [headers setValue:[NSString stringWithFormat:@"%@%ld%@", @"bytes=", (long)offset, @"-"] forKey:@"Range"];
 
     //targetURL规范化......
@@ -830,7 +830,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         NSString* name = self.targetFilePath;
         if(loaded < self.bytesExpected) {
             //文件尚未下载完毕
-            name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", self.targetName, @".[Range==bytes=0-", loaded, @"=Total==", self.bytesExpected, @"].downloading"];
+            name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", self.targetName, @".[Range==bytes=0-", loaded, @"=Total==", self.bytesExpected, @"].download"];
         }
         NSString* originName = [self targetFilePath];
         //如果文件存在，则先删除

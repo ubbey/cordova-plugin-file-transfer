@@ -28,8 +28,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URLConnection;
@@ -37,7 +37,6 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.Inflater;
-
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaResourceApi;
@@ -46,15 +45,11 @@ import org.apache.cordova.LOG;
 import org.apache.cordova.PluginManager;
 import org.apache.cordova.PluginResult;
 import org.apache.cordova.Whitelist;
-import org.apache.cordova.file.FileUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import android.net.Uri;
-import android.os.Build;
-import android.util.Log;
-import android.webkit.CookieManager;
+
 
 public class FileTransfer extends CordovaPlugin {
 
@@ -133,6 +128,7 @@ public class FileTransfer extends CordovaPlugin {
 			this.gzin = gzin;
 		}
 
+  @Override
 		public long getTotalRawBytesRead() {
 			return gzin.getInflater().getBytesRead();
 		}
@@ -167,6 +163,7 @@ public class FileTransfer extends CordovaPlugin {
 			return updateBytesRead(super.read(bytes, offset, count));
 		}
 
+  @Override
 		public long getTotalRawBytesRead() {
 			return bytesRead;
 		}
@@ -328,6 +325,7 @@ public class FileTransfer extends CordovaPlugin {
 		context.business = "upload";
 
 		cordova.getThreadPool().execute(new Runnable() {
+   @Override
 			public void run() {
 				// 删除时先不终止进程
 				if (context.aborted || context.paused) {
@@ -792,12 +790,13 @@ public class FileTransfer extends CordovaPlugin {
 		context.business = "download";
 
 		cordova.getThreadPool().execute(new Runnable() {
+   @Override
 			public void run() {
 				if (context.aborted) {
 					return;
 				}
 				// Accept a path or a URI for the source.
-				Uri tmpTarget = Uri.parse(target + ".[Range==bytes=0-" + offset + "=Total==" + total + "].downloading");
+				Uri tmpTarget = Uri.parse(target + ".[Range==bytes=0-" + offset + "=Total==" + total + "].download");
 				Uri targetUri = resourceApi
 						.remapUri(tmpTarget.getScheme() != null ? tmpTarget : Uri.fromFile(new File(target)));
 				HttpURLConnection connection = null;
@@ -934,7 +933,7 @@ public class FileTransfer extends CordovaPlugin {
 						} else {
 							realLength = file.length();
 							name = target + ".[Range==bytes=0-" + realLength + "=Total==" + contentLength
-									+ "].downloading";
+									+ "].download";
 						}
 						f = resourceApi.mapUriToFile(Uri.parse(name));
 						boolean res = file.renameTo(f);
@@ -1049,6 +1048,7 @@ public class FileTransfer extends CordovaPlugin {
 		if (context != null) {
 			// Closing the streams can block, so execute on a background thread.
 			cordova.getThreadPool().execute(new Runnable() {
+    @Override
 				public void run() {
 					synchronized (context) {
 						File file = context.targetFile;
