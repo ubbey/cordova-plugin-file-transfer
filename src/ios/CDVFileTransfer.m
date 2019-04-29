@@ -59,7 +59,6 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     UInt8* bytes = (UInt8*)[data bytes];
     long long bytesToWrite = [data length];
     long long totalBytesWritten = 0;
-
     while (totalBytesWritten < bytesToWrite) {
         CFIndex result = CFWriteStreamWrite(stream,
                 bytes + totalBytesWritten,
@@ -73,7 +72,6 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         }
         totalBytesWritten += result;
     }
-
     return totalBytesWritten;
 }
 
@@ -306,6 +304,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
             }
             CFWriteStreamClose(writeStream);
             CFRelease(writeStream);
+            NSLog(@"Upload finished......");
         }];
     } else {
         if (multipartFormUpload) {
@@ -319,7 +318,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     return req;
 }
 
-- (CDVFileTransferDelegate*)delegateForUploadCommand:(CDVInvokedUrlCommand*)command
+- (CDVFileTransferDelegate*)delegateForUploadCommand:(CDVInvokedUrlCommand*)command offset:(long long)offset
 {
     NSString* source = [command argumentAtIndex:0];
     NSString* server = [command argumentAtIndex:1];
@@ -339,6 +338,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     delegate.filePlugin = [self.commandDelegate getCommandInstance:@"File"];
     delegate.chunkedMode = chunkedMode;
     delegate.business = @"upload";
+    delegate.offset = offset;
 
     return delegate;
 }
@@ -435,7 +435,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
 - (void)uploadData:(NSData*)fileData command:(CDVInvokedUrlCommand*)command offset:(long long)offset
 {
-    CDVFileTransferDelegate* delegate = [self delegateForUploadCommand:command];
+    CDVFileTransferDelegate* delegate = [self delegateForUploadCommand:command offset:offset];
     NSURLRequest* req = [self requestForUploadCommand:command fileData:fileData offset:offset delegate:delegate];
     NSLog(@"uploadData.....");
     if (req == nil) {
@@ -476,15 +476,19 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 {
     NSString* objectId = [command argumentAtIndex:0];
     @synchronized (activeTransfers) {
+        NSLog(@"pause objectid:%@", objectId);
         CDVFileTransferDelegate* delegate = activeTransfers[objectId];
         if (delegate != nil) {
             NSLog(@"用户暂停文件传输....%@", delegate.source);
             delegate.paused = true;
-            [delegate setProgress:false];
+
             if(delegate.direction == CDV_TRANSFER_DOWNLOAD) {
                 [delegate cancelTransferOnPause:delegate.connection];
+                [delegate setProgress:false];
             }
+            
         }
+        
     }}
 
 - (void)download:(CDVInvokedUrlCommand*)command
@@ -704,9 +708,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSMutableDictionary* uploadResult;
     CDVPluginResult* result = nil;
 
-    NSLog(@"File Transfer Finished with response code %d", self.responseCode);
-
     if (self.direction == CDV_TRANSFER_UPLOAD) {
+        NSLog(@"Upload finished...");
         uploadResponse = [[NSString alloc] initWithData:self.responseData encoding:NSUTF8StringEncoding];
         if (uploadResponse == nil) {
             uploadResponse = [[NSString alloc] initWithData: self.responseData encoding:NSISOLatin1StringEncoding];
