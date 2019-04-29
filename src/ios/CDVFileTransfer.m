@@ -162,7 +162,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     }
 }
 
-- (NSURLRequest*)requestForUploadCommand:(CDVInvokedUrlCommand*)command fileData:(NSData*)fileData offset:(NSInteger)offset delegate:(CDVFileTransferDelegate*)delegate
+- (NSURLRequest*)requestForUploadCommand:(CDVInvokedUrlCommand*)command fileData:(NSData*)fileData offset:(long long)offset delegate:(CDVFileTransferDelegate*)delegate
 {
     // arguments order from js: [filePath, server, fileKey, fileName, mimeType, params, debug, chunkedMode]
     // however, params is a JavaScript object and during marshalling is put into the options dict,
@@ -244,8 +244,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     //断点模式，传入上传起始位置......
     [postBodyBeforeFile appendData:formBoundaryData];
     [postBodyBeforeFile appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n", @"range"] dataUsingEncoding:NSUTF8StringEncoding]];
-    NSInteger length = [fileData length] + offset;
-    NSString* range =  [NSString stringWithFormat:@"%ld-%ld-%ld", (long)offset, (long)(length - 1), (long)length];
+    long long length = [fileData length] + offset;
+    NSString* range =  [NSString stringWithFormat:@"%lld-%lld-%lld", offset, length - 1, length];
     [postBodyBeforeFile appendData:[range dataUsingEncoding:NSUTF8StringEncoding]];
     [postBodyBeforeFile appendData:[@"\r\n" dataUsingEncoding : NSUTF8StringEncoding]];
 
@@ -351,12 +351,10 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSError* __autoreleasing err = nil;
 
     NSDictionary* params = (NSDictionary*)[command argumentAtIndex:5];
-    for(NSString *key in [params allKeys]) {
-        NSLog(@"key: %@ = %@", key, [params objectForKey:key]);
-    }
+//    for(NSString *key in [params allKeys]) {
+//        NSLog(@"key: %@ = %@", key, [params objectForKey:key]);
+//    }
     
-    NSLog(@"cccccccc......");
-
     if ([source hasPrefix:@"data:"] && [source rangeOfString:@"base64"].location != NSNotFound) {
         NSRange commaRange = [source rangeOfString: @","];
         if (commaRange.location == NSNotFound) {
@@ -388,12 +386,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     }
     
     //读取偏移量
-    NSNumber* offsetNumber = [params valueForKey:@"offset"];
-    NSInteger offset = 0;
-    if(offsetNumber != nil) {
-        offset = [offsetNumber intValue];
-        NSLog(@"File offset: %ld", offset);
-    }
+    long long offset = [[params valueForKey:@"offset"] longLongValue];
+    NSLog(@"传入offset值为：%lld", offset);
     
     if (fs) {
         __weak CDVFileTransfer* weakSelf = self;
@@ -434,13 +428,12 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
 - (void)upload:(CDVInvokedUrlCommand*)command
 {
-    NSLog(@"test test test......");
     // fileData and req are split into helper functions to ease the unit testing of delegateForUpload.
     // First, get the file data.  This method will call `uploadData:command`.
     [self fileDataForUploadCommand:command];
 }
 
-- (void)uploadData:(NSData*)fileData command:(CDVInvokedUrlCommand*)command offset:(NSInteger)offset
+- (void)uploadData:(NSData*)fileData command:(CDVInvokedUrlCommand*)command offset:(long long)offset
 {
     CDVFileTransferDelegate* delegate = [self delegateForUploadCommand:command];
     NSURLRequest* req = [self requestForUploadCommand:command fileData:fileData offset:offset delegate:delegate];
@@ -487,9 +480,9 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         if (delegate != nil) {
             NSLog(@"用户暂停文件传输....%@", delegate.source);
             delegate.paused = true;
+            [delegate setProgress:false];
             if(delegate.direction == CDV_TRANSFER_DOWNLOAD) {
                 [delegate cancelTransferOnPause:delegate.connection];
-                [delegate setProgress:false];
             }
         }
     }}
@@ -513,7 +506,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
     NSURL* targetURL;
     NSURL* sourceURL = [NSURL URLWithString:source];
-    NSString* name = [NSString stringWithFormat:@"%@%@%ld%@%ld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].downloading"];
+    NSString* name = [NSString stringWithFormat:@"%@%@%lld%@%lld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].downloading"];
 //    NSString* name = target;
  //   name = [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLHostAllowedCharacterSet]];
 //    NSURL* tmpTargetURL = [[self.commandDelegate getCommandInstance:@"File"] fileSystemURLforLocalPath:name].url;
@@ -726,12 +719,13 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
                 [uploadResult setObject:uploadResponse forKey:@"response"];
                 [uploadResult setObject:self.responseHeaders forKey:@"headers"];
             }
-            [uploadResult setObject:[NSNumber numberWithLongLong:self.bytesTransfered] forKey:@"bytesSent"];
+            [uploadResult setObject:[NSNumber numberWithLongLong:(self.bytesTransfered + self.offset)] forKey:@"bytesSent"];
             [uploadResult setObject:[NSNumber numberWithInt:self.responseCode] forKey:@"responseCode"];
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:uploadResult];
         } else {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[command createFileTransferError:CONNECTION_ERR AndSource:source AndTarget:target AndHttpStatus:self.responseCode AndBody:uploadResponse]];
         }
+        [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
     }
     if (self.direction == CDV_TRANSFER_DOWNLOAD) {
         if (self.targetFileHandle) {
@@ -806,14 +800,17 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         //获取文件总大小
         NSFileManager *fileManager = [NSFileManager defaultManager];
         long long loaded = self.bytesTransfered + self.offset;
-//        if ([fileManager fileExistsAtPath:self.target]){
-//            loaded = [[fileManager attributesOfItemAtPath:self.target error:nil] fileSize];
-//            NSLog(@"文件暂停时已下载%ld,记录大小%ld, 总大小%ld", (long)loaded, (long)self.bytesTransfered, (long)self.bytesExpected);
-//            if(loaded != self.bytesTransfered) {
-////                self.bytesTransfered = loaded;
-//                NSLog(@"警告：文件进度大小已被重置.......");
-//            }
-//        }
+        NSString* target = [[self targetFilePath] stringByReplacingOccurrencesOfString:@"file://"
+                                                                            withString:@""];
+        NSLog(@"查询文件：%@, 预测大小：%lld", target, loaded);
+        if ([fileManager fileExistsAtPath:target]){
+            loaded = [[fileManager attributesOfItemAtPath:target error:nil] fileSize];
+            NSLog(@"文件暂停时已下载%lld,记录大小%lld, 总大小%lld", loaded, self.bytesTransfered, self.bytesExpected);
+            if(loaded != self.bytesTransfered + self.offset) {
+//                self.bytesTransfered = loaded;
+                NSLog(@"警告：文件进度大小已被重置.......");
+            }
+        }
         //检查文件是否存在
         NSString* name = [self targetName];
         if(loaded < self.bytesExpected) {
@@ -833,7 +830,6 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
             [fileManager removeItemAtPath:name error:nil];
             [fileManager moveItemAtPath:currentName toPath:name error:&error];
         }
-        [self setProgress:false];
     }
 }
 
@@ -924,16 +920,33 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
             }
             return;
         }
-        // create target file
-        if ([[NSFileManager defaultManager] createFileAtPath:filePath contents:nil attributes:nil] == NO) {
-            [self cancelTransferWithError:connection errorMessage:@"Could not create target file"];
-            return;
-        }
+        
         // open target file for writing
-        self.targetFileHandle = [NSFileHandle fileHandleForWritingAtPath:filePath];
+        self.targetFileHandle = [NSFileHandle fileHandleForUpdatingAtPath:filePath];
         if (self.targetFileHandle == nil) {
-            [self cancelTransferWithError:connection errorMessage:@"Could not open target file for writing"];
+            // create target file
+            if ([[NSFileManager defaultManager] createFileAtPath:filePath contents:nil attributes:nil] == NO) {
+                [self cancelTransferWithError:connection errorMessage:@"Could not create target file"];
+                return;
+            }
+            self.targetFileHandle = [NSFileHandle fileHandleForWritingAtPath:filePath];
+        } else {
+            long long offset = [self.targetFileHandle seekToEndOfFile];
+            if(offset != self.offset) {
+                NSLog(@"FIle offset %lld is not equal to self.offset %lld", offset, self.offset);
+                self.offset = offset;
+            }
         }
+
+//        if (self.targetFileHandle == nil) {
+//            [self cancelTransferWithError:connection errorMessage:@"Could not open target file for writing"];
+//            // create target file
+//            if ([[NSFileManager defaultManager] createFileAtPath:filePath contents:nil attributes:nil] == NO) {
+//                [self cancelTransferWithError:connection errorMessage:@"Could not create target file"];
+//                return;
+//            }
+//            self.targetFileHandle = [NSFileHandle fileHandleForWritingAtPath:filePath];
+//        }
         DLog(@"Streaming to file %@", filePath);
     }
 }
@@ -973,7 +986,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     [downloadProgress setObject:[NSNumber numberWithBool:lengthComputable] forKey:@"lengthComputable"];
     [downloadProgress setObject:[NSNumber numberWithLongLong:(self.bytesTransfered + self.offset)] forKey:@"loaded"];
     [downloadProgress setObject:[NSNumber numberWithLongLong:self.bytesExpected] forKey:@"total"];
-    NSLog(@"Update progress:%ld,%ld", (long)self.bytesTransfered, (long)self.bytesExpected);
+    //NSLog(@"Update progress:%lld,%lld", (self.bytesTransfered + self.offset), (long)self.bytesExpected);
     CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:downloadProgress];
     [result setKeepCallbackAsBool:true];
     [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
@@ -994,7 +1007,6 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
 - (void)connection:(NSURLConnection*)connection didSendBodyData:(NSInteger)bytesWritten totalBytesWritten:(NSInteger)totalBytesWritten totalBytesExpectedToWrite:(NSInteger)totalBytesExpectedToWrite
 {
-    NSLog(@"delegate信息:%d,%@,%@", self.paused, self.source, self.business);
 //    if(self.paused) {
 //        NSLog(@"用户已停止上传, connection中止.......");
 //        return;
@@ -1003,9 +1015,9 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         NSMutableDictionary* uploadProgress = [NSMutableDictionary dictionaryWithCapacity:3];
 
         [uploadProgress setObject:[NSNumber numberWithBool:true] forKey:@"lengthComputable"];
-        [uploadProgress setObject:[NSNumber numberWithLongLong:totalBytesWritten] forKey:@"loaded"];
-        [uploadProgress setObject:[NSNumber numberWithLongLong:totalBytesExpectedToWrite] forKey:@"total"];
-        NSLog(@"Uploaded: %ld, total: %ld", (long)totalBytesWritten, (long)totalBytesExpectedToWrite);
+        [uploadProgress setObject:[NSNumber numberWithLongLong:(totalBytesWritten + self.offset)] forKey:@"loaded"];
+        [uploadProgress setObject:[NSNumber numberWithLongLong:(totalBytesExpectedToWrite + self.offset)] forKey:@"total"];
+        //NSLog(@"Uploaded: %ld, total: %ld", (long)totalBytesWritten, (long)totalBytesExpectedToWrite);
         CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:uploadProgress];
         [result setKeepCallbackAsBool:true];
         [self.command.commandDelegate sendPluginResult:result callbackId:callbackId];
