@@ -510,7 +510,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
     NSURL* targetURL;
     NSURL* sourceURL = [NSURL URLWithString:source];
-    NSString* name = [NSString stringWithFormat:@"%@%@%lld%@%lld%@", target, @".[Range==bytes=0-", offset, @"=Total==", total, @"].downloading"];
+    NSString* name = [NSString stringWithFormat:@"%@%@%lld%@%lld%@", target, @".[Range==bytes=0-", offset - 1, @"=Total==", total, @"].downloading"];
 //    NSString* name = target;
  //   name = [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLHostAllowedCharacterSet]];
 //    NSURL* tmpTargetURL = [[self.commandDelegate getCommandInstance:@"File"] fileSystemURLforLocalPath:name].url;
@@ -818,7 +818,7 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
         NSString* name = [self targetName];
         if(loaded < self.bytesExpected) {
             //文件尚未下载完毕
-            name = [NSString stringWithFormat:@"%@%@%lld%@%lld%@", self.targetName, @".[Range==bytes=0-", loaded, @"=Total==", self.bytesExpected, @"].downloading"];
+            name = [NSString stringWithFormat:@"%@%@%lld%@%lld%@", self.targetName, @".[Range==bytes=0-", loaded - 1, @"=Total==", self.bytesExpected, @"].downloading"];
         }
         name = [name stringByReplacingOccurrencesOfString:@"file://" withString:@""];
         NSLog(@"重命名到文件：%@", name);
@@ -951,6 +951,8 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 //            self.targetFileHandle = [NSFileHandle fileHandleForWritingAtPath:filePath];
 //        }
         DLog(@"Streaming to file %@", filePath);
+    } else if(self.direction == CDV_TRANSFER_DOWNLOAD) {
+        [self cancelTransferWithError:connection errorMessage:[NSString stringWithFormat:@"File not exists"]];
     }
 }
 
