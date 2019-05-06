@@ -144,7 +144,7 @@ public class FileTransfer extends CordovaPlugin {
 	 * Provides simple total-bytes-read tracking for an existing InputStream
 	 */
 	private static class SimpleTrackingInputStream extends TrackingInputStream {
-		private int bytesRead = 0;
+		private long bytesRead = 0;
 
 		public SimpleTrackingInputStream(InputStream stream) {
 			super(stream);
