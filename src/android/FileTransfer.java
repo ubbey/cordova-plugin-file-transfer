@@ -37,6 +37,8 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.Inflater;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -797,7 +799,7 @@ public class FileTransfer extends CordovaPlugin {
 					return;
 				}
 				// Accept a path or a URI for the source.
-				Uri tmpTarget = Uri.parse(target + ".[Range==bytes=0-" + offset + "=Total==" + total + "].download");
+				Uri tmpTarget = Uri.parse(target + ".[Range==bytes=0-" + (offset-1) + "=Total==" + total + "].download");
 				Uri targetUri = resourceApi
 						.remapUri(tmpTarget.getScheme() != null ? tmpTarget : Uri.fromFile(new File(target)));
 				HttpURLConnection connection = null;
@@ -860,31 +862,55 @@ public class FileTransfer extends CordovaPlugin {
 						}
 
 						connection.connect();
-						if (connection.getResponseCode() == HttpURLConnection.HTTP_NOT_MODIFIED) {
+						int rescode = connection.getResponseCode();
+						if (rescode == HttpURLConnection.HTTP_NOT_MODIFIED) {
 							cached = true;
 							connection.disconnect();
 							LOG.d(LOG_TAG, "Resource not modified: " + source);
 							JSONObject error = createFileTransferError(NOT_MODIFIED_ERR, source, target, connection,
 									null);
 							result = new PluginResult(PluginResult.Status.ERROR, error);
-						} else {
+						} else if(rescode != HttpURLConnection.HTTP_PARTIAL && rescode != HttpURLConnection.HTTP_OK){
+							connection.disconnect();
+							LOG.d(LOG_TAG, "http response code is:%d, not 200 or 206. return file_not_found.", rescode);
+							JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, connection,
+									null);
+							result = new PluginResult(PluginResult.Status.ERROR, error);
+						}else {
 							if (connection.getContentEncoding() == null
 									|| connection.getContentEncoding().equalsIgnoreCase("gzip")) {
 								// Only trust content-length header if we understand
 								// the encoding -- identity or gzip
 								// contentLength = connection.getContentLength() + fileOffset;
-								String sLength = connection.getHeaderField("Content-Length");
-								contentLength = Long.parseLong(sLength) + fileOffset;
-								Log.d(LOG_TAG, "文件总长度: " + contentLength);
+								String regEx="bytes\\s+(\\d+)-(\\d+)\\/(\\d+)";
+								Pattern p = Pattern.compile(regEx);
+								String sRange = connection.getHeaderField("Content-Range");
+								Matcher m;
+								contentLength = 0;
 
-								progress.setLengthComputable(true);
-								progress.setTotal(contentLength);
-							}
-							if (contentLength <= fileOffset) {
+								if (sRange != null){
+									m=p.matcher(sRange);
+									if(m.find()) {
+										long start = Long.parseLong(m.group(1).toString());
+										long end = Long.parseLong(m.group(2).toString());
+										long all = Long.parseLong(m.group(3).toString());
+										Log.d(LOG_TAG, "找到range字段：Range:" + sRange + ",文件总长度: " + all);
+										contentLength = all;
+										progress.setLengthComputable(true);
+										progress.setTotal(contentLength);
+									}
+								}
 
-							} else {
-								inputStream = getInputStream(connection);
+								if(contentLength == 0){
+									String sLength = connection.getHeaderField("Content-Length");
+									long length = Long.parseLong(sLength);
+									contentLength = Long.parseLong(sLength) + fileOffset;
+									Log.d(LOG_TAG, "未找到range字段： contentLength:" + contentLength + ",文件总长度: " + total);
+									progress.setLengthComputable(true);
+									progress.setTotal(contentLength);
+								}
 							}
+							inputStream = getInputStream(connection);
 						}
 					}
 
@@ -900,8 +926,8 @@ public class FileTransfer extends CordovaPlugin {
 							// write bytes to file
 							byte[] buffer = new byte[MAX_BUFFER_SIZE];
 							int bytesRead = 0;
+							Log.d(LOG_TAG, "open file for append! targetUri" + targetUri);
 							outputStream = resourceApi.openOutputStream(targetUri, true);
-							Log.d(LOG_TAG, "aaaaaaaaaa");
 							loaded = fileOffset;
 							while ((bytesRead = inputStream.read(buffer)) > 0) {
 								if (context.paused) {
@@ -917,6 +943,8 @@ public class FileTransfer extends CordovaPlugin {
 								context.sendPluginResult(progressResult);
 							}
 							Log.d(LOG_TAG, "lalala:" + loaded + "," + contentLength);
+						} catch (Exception e){
+							Log.d(LOG_TAG, "exception:"  + e);
 						} finally {
 							synchronized (context) {
 								context.connection = null;
@@ -933,18 +961,27 @@ public class FileTransfer extends CordovaPlugin {
 							name = target;
 						} else {
 							realLength = file.length();
-							name = target + ".[Range==bytes=0-" + realLength + "=Total==" + contentLength
+							name = target + ".[Range==bytes=0-" + (realLength-1) + "=Total==" + contentLength
 									+ "].download";
 						}
+						Log.d(LOG_TAG, "准备文件重命名为:" + name);
 						f = resourceApi.mapUriToFile(Uri.parse(name));
 						boolean res = file.renameTo(f);
 						if (!res) {
 							Log.d(LOG_TAG, "文件已存在，需先删除");
 							// 先删除后重命名
-							f.delete();
-							file.renameTo(f);
+							if(f.delete()){
+								Log.d(LOG_TAG, "删除成功");
+								if(!file.renameTo(f)){
+									Log.d(LOG_TAG, "文件重命名失败");
+								} else {
+									Log.d(LOG_TAG, "文件重命名成功1:" + name);
+								}
+							}else{
+								Log.d(LOG_TAG, "删除失败");
+							}
 						} else {
-							Log.d(LOG_TAG, "文件重命名成功:" + name);
+							Log.d(LOG_TAG, "文件重命名成功2:" + name);
 						}
 
 						// create FileEntry object
@@ -971,7 +1008,7 @@ public class FileTransfer extends CordovaPlugin {
 						if (filePlugin != null) {
 							JSONObject fileEntry = filePlugin.getEntryForFile(file);
 							if (fileEntry != null) {
-								Log.d(LOG_TAG, "Last progress: " + progress);
+								Log.d(LOG_TAG, "Last progress: " + progress.toString());
 								if (realLength != loaded) {
 									Log.e(LOG_TAG, "下载进度大小和实际大小不一致：" + loaded + "," + realLength);
 									progress.setLoaded(realLength);
