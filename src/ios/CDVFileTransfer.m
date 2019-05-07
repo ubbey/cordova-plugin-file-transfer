@@ -428,6 +428,11 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
 
 - (void)upload:(CDVInvokedUrlCommand*)command
 {
+	NSString* objectId = [command argumentAtIndex:9];
+	if(activeTransfers[objectId]) {
+    	NSLog(@"上传任务已存在.....");
+		return;
+	}
     // fileData and req are split into helper functions to ease the unit testing of delegateForUpload.
     // First, get the file data.  This method will call `uploadData:command`.
     [self fileDataForUploadCommand:command];
@@ -500,6 +505,11 @@ static CFIndex WriteDataToStream(NSData* data, CFWriteStreamRef stream)
     NSString* objectId = [command argumentAtIndex:3];
     NSMutableDictionary* headers = [command argumentAtIndex:4 withDefault:nil];
     NSDictionary* params = [command argumentAtIndex:5 withDefault:nil];
+
+	if(activeTransfers[objectId]) {
+		NSLog(@"当前下载任务已经存在...");
+		return;
+	}
 
     long long offset = [[params valueForKey:@"offset"] longLongValue];
     long long total = [[params valueForKey:@"total"] longLongValue];

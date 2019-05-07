@@ -302,6 +302,14 @@ public class FileTransfer extends CordovaPlugin {
 		final String httpMethod = getArgument(args, 10, "POST");
 		final long offset = params.optLong("offset", 0);
 		final CordovaResourceApi resourceApi = webView.getResourceApi();
+
+		synchronized (activeRequests) {
+			if (activeRequests.get(objectId)) {
+				Log.d(LOG_TAG, "当前上传文件任务已存在...");
+				return;
+			}
+		}
+
 		Log.d(LOG_TAG, "上传偏移量: " + offset);
 		LOG.d(LOG_TAG, "fileKey: " + fileKey);
 		LOG.d(LOG_TAG, "fileName: " + fileName);
@@ -739,6 +747,14 @@ public class FileTransfer extends CordovaPlugin {
 		int uriType = CordovaResourceApi.getUriType(sourceUri);
 		final boolean useHttps = uriType == CordovaResourceApi.URI_TYPE_HTTPS;
 		final boolean isLocalTransfer = !useHttps && uriType != CordovaResourceApi.URI_TYPE_HTTP;
+
+		synchronized (activeRequests) {
+			if (activeRequests.get(objectId)) {
+				Log.d(LOG_TAG, "当前下载文件任务已存在...");
+				return;
+			}
+		}
+
 		if (uriType == CordovaResourceApi.URI_TYPE_UNKNOWN) {
 			JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target, null, 0, null);
 			LOG.e(LOG_TAG, "Unsupported URI: " + sourceUri);
