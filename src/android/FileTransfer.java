@@ -762,7 +762,7 @@ public class FileTransfer extends CordovaPlugin {
 			return;
 		}
 
-		Log.d(LOG_TAG, "文件已下载:" + offset + ",总大小:" + total);
+		Log.d(LOG_TAG, "文件已下载:" + offset + ",总大小:" + total + "objectId:" + objectId);
 
 		/*
 		 * This code exists for compatibility between 3.x and 4.x versions of Cordova.
@@ -823,6 +823,7 @@ public class FileTransfer extends CordovaPlugin {
 				PluginResult result = null;
 				TrackingInputStream inputStream = null;
 				boolean cached = false;
+				boolean httpstatusok = true;
 				long fileOffset = offset;
 				long loaded = 0; // 已下载大小
 				long contentLength = 0; // 文件总大小
@@ -887,6 +888,7 @@ public class FileTransfer extends CordovaPlugin {
 									null);
 							result = new PluginResult(PluginResult.Status.ERROR, error);
 						} else if(rescode != HttpURLConnection.HTTP_PARTIAL && rescode != HttpURLConnection.HTTP_OK){
+							httpstatusok = false;
 							connection.disconnect();
 							LOG.d(LOG_TAG, "http response code is:%d, not 200 or 206. return file_not_found.", rescode);
 							JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target, connection,
@@ -930,7 +932,7 @@ public class FileTransfer extends CordovaPlugin {
 						}
 					}
 
-					if (!cached) {
+					if (!cached && httpstatusok) {
 						try {
 							synchronized (context) {
 								if (context.aborted) {
@@ -969,7 +971,7 @@ public class FileTransfer extends CordovaPlugin {
 							safeClose(outputStream);
 						}
 
-						Log.d(LOG_TAG, "文件下载完成");
+						Log.d(LOG_TAG, "文件下载完成,objectId=" + objectId);
 						File f;
 						String name;
 						long realLength = loaded;
@@ -990,11 +992,13 @@ public class FileTransfer extends CordovaPlugin {
 								Log.d(LOG_TAG, "删除成功");
 								if(!file.renameTo(f)){
 									Log.d(LOG_TAG, "文件重命名失败");
+									throw  new Throwable("rename failed");
 								} else {
 									Log.d(LOG_TAG, "文件重命名成功1:" + name);
 								}
 							}else{
 								Log.d(LOG_TAG, "删除失败");
+								throw  new Throwable("delete failed");
 							}
 						} else {
 							Log.d(LOG_TAG, "文件重命名成功2:" + name);
