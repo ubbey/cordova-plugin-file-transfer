@@ -304,7 +304,7 @@ public class FileTransfer extends CordovaPlugin {
 		final CordovaResourceApi resourceApi = webView.getResourceApi();
 
 		synchronized (activeRequests) {
-			if (activeRequests.get(objectId)) {
+			if (activeRequests.get(objectId)!=null) {
 				Log.d(LOG_TAG, "当前上传文件任务已存在...");
 				return;
 			}
@@ -749,7 +749,7 @@ public class FileTransfer extends CordovaPlugin {
 		final boolean isLocalTransfer = !useHttps && uriType != CordovaResourceApi.URI_TYPE_HTTP;
 
 		synchronized (activeRequests) {
-			if (activeRequests.get(objectId)) {
+			if (activeRequests.get(objectId)!=null) {
 				Log.d(LOG_TAG, "当前下载文件任务已存在...");
 				return;
 			}
